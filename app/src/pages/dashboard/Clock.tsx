@@ -1,5 +1,6 @@
-// ClockMate Pro - Clock In/Out Page with GPS Geofencing, Live Attendance, Break Timeline
-import { useState, useEffect, useMemo, useCallback } from 'react';
+// ClockMate Pro - Clock In/Out Page with GPS, Live Attendance, Break Timeline, Photo Verification
+// NOTE: Geofence check is performed server-side. Frontend only shows location for user awareness.
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useParams } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
@@ -8,7 +9,8 @@ import {
   ArrowLeft, LogIn, Plus, Minus, Users, Shield,
   Radio, TrendingUp, Bell, ChevronDown, ChevronUp,
   LocateFixed, LocateOff, Eye, History, Edit3,
-  MessageSquare, X, Footprints, Globe, XCircle
+  MessageSquare, X, Footprints, Globe, XCircle,
+  Camera, Aperture, UserCheck
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,7 +19,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useAuthStore } from '@/store';
 import { useGeolocation } from '@/hooks/useGeolocation';
 import { useInterval } from '@/hooks/useInterval';
-import { isWithinGeofence, haversineDistance } from '@/lib/geo';
+import { haversineDistance } from '@/lib/geo';
 import {
   clockIn, clockOut, startBreak, endBreak,
   getCurrentTimeEntry, getTimeEntries, getShifts,
@@ -50,22 +52,180 @@ function formatDistance(meters: number): string {
   return `${(meters / 1000).toFixed(1)}km`;
 }
 
+/** Compute total break duration in milliseconds. */
+function totalBreakMs(breaks: Array<{ start?: string; end?: string }>): number {
+  let ms = 0;
+  for (const b of breaks || []) {
+    if (b.start && b.end) {
+      ms += new Date(b.end).getTime() - new Date(b.start).getTime();
+    } else if (b.start && !b.end) {
+      // active break – subtract elapsed break time so timer pauses
+      ms += Date.now() - new Date(b.start).getTime();
+    }
+  }
+  return ms;
+}
+
 /* ════════════════════════════════════════════
-   GEOFENCE STATUS COMPONENT
+   PHOTO CAPTURE MODAL (Device Camera)
    ════════════════════════════════════════════ */
-function GeofenceStatus({
-  position,
-  locations,
-  onNearestFound
-}: {
+function PhotoCaptureModal({ isOpen, onClose, onConfirm }: {
+  isOpen: boolean;
+  onClose: () => void;
+  onConfirm: (base64: string) => void;
+}) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [stream, setStream] = useState<MediaStream | null>(null);
+  const [captured, setCaptured] = useState<string | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
+
+  // Start camera when modal opens
+  useEffect(() => {
+    if (!isOpen) {
+      stream?.getTracks().forEach(t => t.stop());
+      setStream(null);
+      setCaptured(null);
+      setCameraError(null);
+      return;
+    }
+
+    let cancelled = false;
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } } })
+      .then(s => {
+        if (cancelled) { s.getTracks().forEach(t => t.stop()); return; }
+        setStream(s);
+        if (videoRef.current) videoRef.current.srcObject = s;
+      })
+      .catch(err => {
+        setCameraError(err?.message || 'Camera access denied');
+        logger.error('[PhotoCapture] camera error:', err);
+      });
+
+    return () => { cancelled = true; stream?.getTracks().forEach(t => t.stop()); };
+  }, [isOpen]);
+
+  /** Resize and compress photo to keep base64 under ~100KB */
+  const compressPhoto = (sourceCanvas: HTMLCanvasElement): string => {
+    const MAX_WIDTH = 640;
+    const MAX_HEIGHT = 480;
+    let w = sourceCanvas.width;
+    let h = sourceCanvas.height;
+    // Scale down if larger than max
+    if (w > MAX_WIDTH || h > MAX_HEIGHT) {
+      const ratio = Math.min(MAX_WIDTH / w, MAX_HEIGHT / h);
+      w = Math.round(w * ratio);
+      h = Math.round(h * ratio);
+    }
+    const offscreen = document.createElement('canvas');
+    offscreen.width = w;
+    offscreen.height = h;
+    const ctx2 = offscreen.getContext('2d');
+    if (!ctx2) return sourceCanvas.toDataURL('image/jpeg', 0.6);
+    ctx2.drawImage(sourceCanvas, 0, 0, w, h);
+    return offscreen.toDataURL('image/jpeg', 0.6);
+  };
+
+  const takePhoto = () => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas || !stream) return;
+    // Capture at full resolution first
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    // Compress before storing
+    const compressed = compressPhoto(canvas);
+    setCaptured(compressed);
+  };
+
+  const retake = () => setCaptured(null);
+
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <>
+        <motion.div className="fixed inset-0 bg-black/60 z-50" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
+        <motion.div
+          className="fixed z-50 bg-white rounded-2xl shadow-2xl w-[95vw] max-w-sm overflow-hidden"
+          style={{ left: '50%', top: '50%', transform: 'translate(-50%, -50%)' }}
+          initial={{ opacity: 0, scale: 0.9, y: 20 }}
+          animate={{ opacity: 1, scale: 1, y: 0 }}
+          exit={{ opacity: 0, scale: 0.9, y: 20 }}
+        >
+          <div className="p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <h3 className="text-lg font-semibold flex items-center gap-2"><Camera className="size-5 text-blue-500" />Photo Verification</h3>
+              <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100" aria-label="Close"><X className="size-5" /></button>
+            </div>
+            <p className="text-sm text-slate-500">Take a quick selfie to verify your identity before clocking in.</p>
+
+            {cameraError ? (
+              <div className="p-4 bg-red-50 rounded-lg text-center">
+                <AlertCircle className="size-8 text-red-500 mx-auto mb-2" />
+                <p className="text-sm text-red-700">{cameraError}</p>
+                <p className="text-xs text-red-500 mt-1">Please allow camera access and try again.</p>
+              </div>
+            ) : (
+              <>
+                <div className="relative aspect-[4/3] bg-slate-900 rounded-lg overflow-hidden">
+                  {!captured ? (
+                    <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+                  ) : (
+                    <img src={captured} alt="Captured selfie" className="w-full h-full object-cover" />
+                  )}
+                  {!captured && stream && (
+                    <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                      <div className="w-40 h-40 border-2 border-white/50 rounded-full" />
+                    </div>
+                  )}
+                </div>
+                <canvas ref={canvasRef} className="hidden" />
+
+                <div className="flex gap-2">
+                  {!captured ? (
+                    <Button onClick={takePhoto} className="flex-1" disabled={!stream}>
+                      <Aperture className="size-4 mr-2" />Take Photo
+                    </Button>
+                  ) : (
+                    <>
+                      <Button variant="outline" onClick={retake} className="flex-1">
+                        <Camera className="size-4 mr-2" />Retake
+                      </Button>
+                      <Button onClick={() => onConfirm(captured)} className="flex-1 bg-emerald-600 hover:bg-emerald-700">
+                        <UserCheck className="size-4 mr-2" />Confirm & Clock In
+                      </Button>
+                    </>
+                  )}
+                </div>
+              </>
+            )}
+
+            {!cameraError && (
+              <button onClick={() => { onConfirm(''); }} className="w-full text-xs text-slate-400 hover:text-slate-600 py-1">
+                Skip photo and clock in without verification
+              </button>
+            )}
+          </div>
+        </motion.div>
+      </>
+    </AnimatePresence>
+  );
+}
+
+/* ════════════════════════════════════════════
+   GEOFENCE STATUS COMPONENT (Display only – no gating)
+   ════════════════════════════════════════════ */
+function GeofenceStatus({ position, locations }: {
   position: { latitude: number; longitude: number } | null;
   locations: Location[];
-  onNearestFound?: (loc: Location | null, distance: number) => void;
 }) {
-  type NearestResult = { loc: Location; dist: number };
-  const nearest = useMemo<NearestResult | null>(() => {
+  const nearest = useMemo(() => {
     if (!position || locations.length === 0) return null;
-    let closest: NearestResult | null = null;
+    let closest: { loc: Location; dist: number } | null = null;
     for (let i = 0; i < locations.length; i++) {
       const loc = locations[i];
       if (!loc.coordinates?.lat || !loc.coordinates?.lng) continue;
@@ -77,10 +237,6 @@ function GeofenceStatus({
     }
     return closest;
   }, [position, locations]);
-
-  useEffect(() => {
-    onNearestFound?.(nearest?.loc || null, nearest?.dist || Infinity);
-  }, [nearest, onNearestFound]);
 
   if (!position) {
     return (
@@ -100,22 +256,21 @@ function GeofenceStatus({
     );
   }
 
-  const gf = nearest.loc.geofence;
-  const radius = gf?.radius || 200;
+  const radius = nearest.loc.geofence?.radius || 200;
   const within = nearest.dist <= radius;
 
   return (
-    <div className={`flex items-center gap-2 p-3 rounded-lg border ${within ? 'bg-emerald-50 border-emerald-200' : 'bg-red-50 border-red-200'}`}>
-      {within ? <LocateFixed className="size-4 text-emerald-600" /> : <LocateOff className="size-4 text-red-500" />}
+    <div className={`flex items-center gap-2 p-3 rounded-lg border ${within ? 'bg-emerald-50 border-emerald-200' : 'bg-amber-50 border-amber-200'}`}>
+      {within ? <LocateFixed className="size-4 text-emerald-600" /> : <LocateOff className="size-4 text-amber-500" />}
       <div className="flex-1 min-w-0">
-        <p className={`text-sm font-medium ${within ? 'text-emerald-700' : 'text-red-700'}`}>
-          {within ? 'Within range' : 'Out of range'} of {nearest.loc.name}
+        <p className={`text-sm font-medium ${within ? 'text-emerald-700' : 'text-amber-700'}`}>
+          {within ? 'Within range' : 'Outside range'} of {nearest.loc.name}
         </p>
-        <p className={`text-xs ${within ? 'text-emerald-600' : 'text-red-600'}`}>
+        <p className={`text-xs ${within ? 'text-emerald-600' : 'text-amber-600'}`}>
           {formatDistance(nearest.dist)} away · Geofence: {formatDistance(radius)}
         </p>
       </div>
-      {!within && <Badge className="bg-red-100 text-red-700 text-[10px]">Outside</Badge>}
+      {!within && <Badge className="bg-amber-100 text-amber-700 text-[10px]">Server checks</Badge>}
     </div>
   );
 }
@@ -221,9 +376,8 @@ function OvertimeWarning({ entries, otThreshold, weeklyThreshold }: {
 /* ════════════════════════════════════════════
    BREAK TIMELINE
    ════════════════════════════════════════════ */
-function BreakTimeline({ breaks, isOnBreak }: { breaks: { start: string; end?: string; type: string }[]; isOnBreak: boolean }) {
+function BreakTimeline({ breaks, isOnBreak }: { breaks: Array<{ start: string; end?: string; type?: string }>; isOnBreak: boolean }) {
   if (breaks.length === 0 && !isOnBreak) return null;
-
   const allBreaks = [...breaks];
 
   return (
@@ -232,15 +386,12 @@ function BreakTimeline({ breaks, isOnBreak }: { breaks: { start: string; end?: s
         <Coffee className="size-3.5" />Break History
       </h4>
       <div className="relative pl-4 space-y-3">
-        {/* Vertical line */}
         <div className="absolute left-1.5 top-0 bottom-0 w-0.5 bg-slate-200 rounded-full" />
-
         {allBreaks.map((b, i) => {
           const start = b.start ? new Date(b.start) : null;
           const end = b.end ? new Date(b.end) : null;
           const duration = start && end ? differenceInMinutes(end, start) : 0;
           const isActive = !b.end;
-
           return (
             <motion.div
               key={i}
@@ -249,7 +400,6 @@ function BreakTimeline({ breaks, isOnBreak }: { breaks: { start: string; end?: s
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: i * 0.1 }}
             >
-              {/* Dot on timeline */}
               <div className={`absolute -left-4 top-3 w-3 h-3 rounded-full border-2 ${isActive ? 'bg-amber-500 border-amber-300 animate-pulse' : 'bg-slate-400 border-slate-200'}`} />
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
@@ -277,7 +427,8 @@ function BreakTimeline({ breaks, isOnBreak }: { breaks: { start: string; end?: s
    MANUAL ENTRY MODAL (Forgot to clock in)
    ════════════════════════════════════════════ */
 function ManualEntryModal({ isOpen, onClose, onSave }: {
-  isOpen: boolean; onClose: () => void; onSave: (data: { clockIn: string; clockOut: string; notes: string; reason: ManualEntryReason }) => Promise<void>;
+  isOpen: boolean; onClose: () => void;
+  onSave: (data: { clockIn: string; clockOut: string; notes: string; reason: ManualEntryReason }) => Promise<void>;
 }) {
   const [form, setForm] = useState({ date: format(new Date(), 'yyyy-MM-dd'), clockIn: '09:00', clockOut: '17:00', notes: '', reason: 'FORGOT' as ManualEntryReason });
   const [saving, setSaving] = useState(false);
@@ -296,9 +447,8 @@ function ManualEntryModal({ isOpen, onClose, onSave }: {
       onClose();
       toast.success('Manual entry submitted for approval');
     } catch (e: unknown) {
-      const error = e as Error;
-      logger.error('[Clock] manual entry failed:', error);
-      toast.error(error.message || 'Failed');
+      logger.error('[Clock] manual entry failed:', e);
+      toast.error((e as Error).message || 'Failed');
     } finally { setSaving(false); }
   };
 
@@ -343,7 +493,10 @@ function ManualEntryModal({ isOpen, onClose, onSave }: {
 /* ════════════════════════════════════════════
    LIVE ATTENDANCE DASHBOARD (Admin/Manager)
    ════════════════════════════════════════════ */
-function LiveAttendance({ orgId, employees, onBulkClockOut }: { orgId: string; employees: Employee[]; onBulkClockOut: (count: number) => void }) {
+function LiveAttendance({ orgId, employees, onBulkClockOut, onClockOutOne }: {
+  orgId: string; employees: Employee[]; onBulkClockOut: (count: number) => void;
+  onClockOutOne?: (entryId: string) => void;
+}) {
   const [activeEntries, setActiveEntries] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedTab, setSelectedTab] = useState<'active' | 'today'>('active');
@@ -361,12 +514,14 @@ function LiveAttendance({ orgId, employees, onBulkClockOut }: { orgId: string; e
   }, [orgId]);
 
   useEffect(() => { loadActive(); }, [loadActive]);
-  useInterval(loadActive, 30000); // Refresh every 30s
+  useInterval(loadActive, 30000);
 
   const nowActive = activeEntries.filter(e => e.status === 'ACTIVE');
   const todayCompleted = activeEntries.filter(e => e.status === 'COMPLETED');
-
-  const getEmp = (userId: string) => employees.find(e => e.id === userId || e.userId === userId);
+  const getEmp = (userId: string) => employees.find(e => {
+    const eid = typeof e.userId === 'string' ? e.userId : (e.userId as unknown as Record<string, unknown>)?._id?.toString?.() || e.userId?.toString?.() || e.id;
+    return e.id === userId || eid === userId;
+  });
 
   return (
     <Card>
@@ -389,7 +544,7 @@ function LiveAttendance({ orgId, employees, onBulkClockOut }: { orgId: string; e
       </CardHeader>
       <CardContent>
         <Tabs value={selectedTab} onValueChange={v => setSelectedTab(v as 'active' | 'today')}>
-          <TabsList className="mb-3"><TabsTrigger value="active">Active Now</TabsTrigger><TabsTrigger value="today">Today</TabsTrigger></TabsList>
+          <TabsList className="mb-3"><TabsTrigger value="active" className="text-xs">Active Now</TabsTrigger><TabsTrigger value="today" className="text-xs">Today</TabsTrigger></TabsList>
         </Tabs>
 
         {loading ? (
@@ -402,7 +557,7 @@ function LiveAttendance({ orgId, employees, onBulkClockOut }: { orgId: string; e
               ) : nowActive.map(entry => {
                 const emp = getEmp(entry.userId);
                 const cin = entry.clockIn ? new Date(entry.clockIn.time) : null;
-                const elapsed = cin ? differenceInSeconds(new Date(), cin) : 0;
+                const elapsed = cin ? Math.floor((Date.now() - cin.getTime() - totalBreakMs(entry.breaks || [])) / 1000) : 0;
                 return (
                   <motion.div key={entry.id} className="flex items-center gap-3 p-2.5 bg-emerald-50 rounded-lg border border-emerald-100" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
                     <div className="size-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xs font-bold shrink-0">{emp?.firstName?.[0] || '?'}</div>
@@ -411,6 +566,11 @@ function LiveAttendance({ orgId, employees, onBulkClockOut }: { orgId: string; e
                       <p className="text-[10px] text-slate-500">Since {cin ? format(cin, 'h:mm a') : '--:--'}</p>
                     </div>
                     <span className="text-sm font-mono font-semibold text-emerald-700">{formatDuration(elapsed)}</span>
+                    {onClockOutOne && (
+                      <Button size="sm" variant="destructive" className="h-7 text-xs px-2" onClick={() => onClockOutOne(entry.id)}>
+                        <Square className="size-3 mr-1" />Stop
+                      </Button>
+                    )}
                   </motion.div>
                 );
               })
@@ -445,19 +605,17 @@ function OverrideQueue({ orgId }: { orgId: string }) {
   const [entries, setEntries] = useState<TimeEntry[]>([]);
   const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadData();
-  }, [orgId]);
+  useEffect(() => { loadData(); }, [orgId]);
 
   async function loadData() {
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
+      const today = new Date(); today.setHours(0, 0, 0, 0);
       const all = await getTimeEntries(orgId, { startDate: today.toISOString(), endDate: new Date().toISOString() });
-      // Entries where withinGeofence is false or there are notes about override
-      const overrides = all.filter(e => e.clockIn && !e.clockIn.withinGeofence);
+      const overrides = all.filter(e => e.clockIn && e.clockIn.geofenceStatus === 'GEOFENCE_OVERRIDE');
       setEntries(overrides);
-    } catch { /* ignore */ } finally { setLoading(false); }
+    } catch (err: unknown) {
+      logger.error('[OverrideQueue] load failed:', err);
+    } finally { setLoading(false); }
   }
 
   if (loading) return null;
@@ -476,7 +634,10 @@ function OverrideQueue({ orgId }: { orgId: string }) {
             <div key={entry.id} className="flex items-center gap-2 p-2 bg-red-50 rounded-lg text-sm">
               <AlertCircle className="size-4 text-red-500 shrink-0" />
               <span className="flex-1 text-red-700">Clocked in outside geofence at {entry.clockIn ? format(new Date(entry.clockIn.time), 'h:mm a') : '--:--'}</span>
-              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => toast.info('Override approval coming soon')}>Review</Button>
+              {entry.clockIn?.photoBase64 && (
+                <Badge className="bg-blue-100 text-blue-700 text-[10px] h-5"><Camera className="size-2.5 mr-1" />Photo</Badge>
+              )}
+              <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => toast.info('Override review coming soon')}>Review</Button>
             </div>
           ))}
         </div>
@@ -493,10 +654,15 @@ export default function ClockPage() {
   const { user } = useAuthStore();
   const isManager = ['ADMIN', 'OWNER', 'MANAGER'].includes(user?.role || '');
 
-  // Geolocation
+  // Geolocation (raw coords sent to backend – no frontend gating)
   const geo = useGeolocation();
-  const [nearestLoc, setNearestLoc] = useState<Location | null>(null);
-  const [nearestDist, setNearestDist] = useState(Infinity);
+
+  // Auto-fetch GPS on mount and start watching
+  useEffect(() => {
+    geo.getPosition();
+    geo.startWatching();
+    return () => { geo.stopWatching(); };
+  }, []);
 
   // Clock state
   const [isClockedIn, setIsClockedIn] = useState(false);
@@ -505,6 +671,10 @@ export default function ClockPage() {
   const [onBreak, setOnBreak] = useState(false);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+
+  // Photo verification state
+  const [photoModalOpen, setPhotoModalOpen] = useState(false);
+  const [pendingPhotoBase64, setPendingPhotoBase64] = useState<string>('');
 
   // Data
   const [todayEntries, setTodayEntries] = useState<TimeEntry[]>([]);
@@ -525,20 +695,7 @@ export default function ClockPage() {
   const [pendingEntries, setPendingEntries] = useState<TimeEntry[]>([]);
   const [pendingLoading, setPendingLoading] = useState(false);
 
-  async function loadPendingEntries() {
-    if (!orgId || !isManager) return;
-    try {
-      setPendingLoading(true);
-      const entries = await getPendingManualEntries(orgId);
-      setPendingEntries(entries);
-    } catch (err: unknown) {
-      logger.error('[Clock] loadPendingEntries failed:', err);
-    } finally {
-      setPendingLoading(false);
-    }
-  }
-
-  // Load current status
+  // ─── Load current status ───
   useEffect(() => {
     if (orgId && user?.id) {
       loadCurrentEntry();
@@ -546,20 +703,18 @@ export default function ClockPage() {
       loadWeekEntries();
       loadTodayShift();
       loadLocations();
-      if (isManager) {
-        loadEmployees();
-        loadPendingEntries();
-      }
+      if (isManager) { loadEmployees(); loadPendingEntries(); }
     }
   }, [orgId, user]);
 
-  // Timer using Date.now() calculation (accurate, handles tab backgrounding)
+  // ─── Timer: Date.now() - clockInTime - totalBreakMs ───
   useInterval(() => {
-    if (isClockedIn && currentEntry && !onBreak) {
-      const start = new Date(currentEntry.clockIn.time).getTime();
-      setElapsedSeconds(Math.floor((Date.now() - start) / 1000));
+    if (isClockedIn && currentEntry?.clockIn?.time) {
+      const clockInMs = new Date(currentEntry.clockIn.time).getTime();
+      const breakMs = totalBreakMs(currentEntry.breaks || []);
+      setElapsedSeconds(Math.max(0, Math.floor((Date.now() - clockInMs - breakMs) / 1000)));
     }
-  }, isClockedIn && !onBreak ? 1000 : null);
+  }, isClockedIn ? 1000 : null);
 
   async function loadCurrentEntry() {
     if (!user?.id) return;
@@ -574,20 +729,14 @@ export default function ClockPage() {
       }
     } catch (err: unknown) {
       logger.debug('[Clock] no active entry:', (err as Error).message);
-    }
-    finally { setLoading(false); }
+    } finally { setLoading(false); }
   }
 
   async function loadTodayEntries() {
     if (!orgId || !user?.id) return;
     try {
-      const today = new Date();
-      today.setHours(0, 0, 0, 0);
-      const entries = await getTimeEntries(orgId, {
-        userId: user.id,
-        startDate: today.toISOString(),
-        endDate: new Date().toISOString()
-      });
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const entries = await getTimeEntries(orgId, { userId: user.id, startDate: today.toISOString(), endDate: new Date().toISOString() });
       setTodayEntries(entries);
     } catch (err: unknown) {
       logger.error('[Clock] loadTodayEntries failed:', err);
@@ -598,11 +747,7 @@ export default function ClockPage() {
     if (!orgId || !user?.id) return;
     try {
       const ws = startOfWeek(new Date(), { weekStartsOn: 1 });
-      const entries = await getTimeEntries(orgId, {
-        userId: user.id,
-        startDate: ws.toISOString(),
-        endDate: new Date().toISOString()
-      });
+      const entries = await getTimeEntries(orgId, { userId: user.id, startDate: ws.toISOString(), endDate: new Date().toISOString() });
       setWeekEntries(entries);
     } catch (err: unknown) {
       logger.error('[Clock] loadWeekEntries failed:', err);
@@ -612,15 +757,33 @@ export default function ClockPage() {
   async function loadTodayShift() {
     if (!orgId || !user?.id) return;
     try {
-      const today = new Date();
-      const shifts = await getShifts(orgId, today.toISOString(), today.toISOString());
-      const myShift = shifts.find(s => {
-        if (!s.assignedTo) return false;
-        return s.assignedTo.some((a: string | { id?: string; userId?: string }) => {
-          const id = typeof a === 'string' ? a : a?.id || a?.userId;
-          return id === user.id;
+      const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+      const todayEnd = new Date(); todayEnd.setHours(23, 59, 59, 999);
+      logger.debug('[Clock] Fetching shifts:', { orgId, start: todayStart.toISOString(), end: todayEnd.toISOString(), userId: user.id });
+      const shifts = await getShifts(orgId, todayStart.toISOString(), todayEnd.toISOString());
+      logger.debug('[Clock] Got shifts:', shifts.length, shifts.map((s: Shift) => ({ title: s.title, assignedTo: s.assignedTo, start: s.startTime })));
+      // Find the first shift assigned to the current user
+      const myShift = shifts.find((s: Shift) => {
+        if (!s.assignedTo || !Array.isArray(s.assignedTo) || s.assignedTo.length === 0) return false;
+        return s.assignedTo.some((a: unknown) => {
+          // Handle multiple possible formats: string, object with id/userId/_id, or ObjectId
+          if (typeof a === 'string') return a === user.id;
+          if (a && typeof a === 'object') {
+            const ao = a as Record<string, unknown>;
+            const idVal = (ao.id || ao.userId || ao._id) as string | undefined;
+            if (typeof idVal === 'string') return idVal === user.id;
+            if (idVal && typeof (idVal as unknown as { toString: () => string }).toString === 'function') {
+              return (idVal as unknown as { toString: () => string }).toString() === user.id;
+            }
+          }
+          return false;
         });
       });
+      if (myShift) {
+        logger.debug('[Clock] Found shift:', myShift.title);
+      } else {
+        logger.debug('[Clock] No shift found for user', user.id, 'among', shifts.length, 'shifts');
+      }
       setTodayShift(myShift || null);
     } catch (err: unknown) {
       logger.error('[Clock] loadTodayShift failed:', err);
@@ -647,68 +810,100 @@ export default function ClockPage() {
     }
   }
 
-  // Geofence check
-  const gfRadius = nearestLoc?.geofence?.radius || 200;
-  const withinGeofence = nearestDist <= gfRadius;
-
-  const handleClockIn = async () => {
-    if (!orgId || !user?.id) return;
+  async function loadPendingEntries() {
+    if (!orgId || !isManager) return;
     try {
-      setActionLoading(true);
+      setPendingLoading(true);
+      const entries = await getPendingManualEntries(orgId);
+      setPendingEntries(entries);
+    } catch (err: unknown) {
+      logger.error('[Clock] loadPendingEntries failed:', err);
+    } finally { setPendingLoading(false); }
+  }
+
+  // ─── Clock In (with photo verification step) ───
+  const initiateClockIn = () => {
+    if (!geo.position) {
+      toast.error('GPS location required. Please enable location services.');
+      return;
+    }
+    setPhotoModalOpen(true);
+  };
+
+  const executeClockIn = async (photoBase64: string) => {
+    if (!orgId || !user?.id) return;
+    setPhotoModalOpen(false);
+    setActionLoading(true);
+    try {
       const loc = geo.position ? { lat: geo.position.latitude, lng: geo.position.longitude } : undefined;
       const entry = await clockIn({
-        orgId, userId: user.id,
+        orgId,
+        userId: user.id,
         location: loc,
         accuracy: geo.position?.accuracy,
         method: 'WEB',
-        withinGeofence: withinGeofence || !nearestLoc, // If no location configured, allow
+        photoBase64: photoBase64 || undefined,
       });
       setCurrentEntry(entry);
       setIsClockedIn(true);
       setElapsedSeconds(0);
       toast.success('Clocked in successfully!');
       loadTodayEntries();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to clock in');
+    } catch (err: unknown) {
+      const error = err as Error;
+      logger.error('[Clock] clock-in failed:', error);
+      toast.error(error.message || 'Failed to clock in');
     } finally { setActionLoading(false); }
   };
 
+  // ─── Clock Out ───
   const handleClockOut = async () => {
     if (!currentEntry?.id) return;
-    try {
-      setActionLoading(true);
-      const loc = geo.position ? { lat: geo.position.latitude, lng: geo.position.longitude } : undefined;
-      await clockOut({
-        entryId: currentEntry.id,
-        location: loc,
-        accuracy: geo.position?.accuracy,
-        method: 'WEB',
-        withinGeofence: withinGeofence || !nearestLoc,
-      });
-      setCurrentEntry(null);
-      setIsClockedIn(false);
-      setElapsedSeconds(0);
-      setOnBreak(false);
-
-      // Auto-generate timesheet
-      if (orgId && user?.id) {
+    setConfirmDialog({
+      open: true,
+      title: 'Clock Out',
+      description: 'Are you sure you want to clock out?',
+      variant: 'default',
+      onConfirm: async () => {
+        setActionLoading(true);
         try {
-          const ws = startOfWeek(new Date(), { weekStartsOn: 1 });
-          const we = endOfWeek(new Date(), { weekStartsOn: 1 });
-          await autoGenerateTimesheet({ orgId, userId: user.id, startDate: ws.toISOString(), endDate: we.toISOString() });
-          toast.success('Timesheet updated');
+          const loc = geo.position ? { lat: geo.position.latitude, lng: geo.position.longitude } : undefined;
+          await clockOut({
+            entryId: currentEntry.id,
+            location: loc,
+            accuracy: geo.position?.accuracy,
+            method: 'WEB',
+          });
+          setCurrentEntry(null);
+          setIsClockedIn(false);
+          setElapsedSeconds(0);
+          setOnBreak(false);
+
+          // Auto-generate timesheet
+          if (orgId && user?.id) {
+            try {
+              const ws = startOfWeek(new Date(), { weekStartsOn: 1 });
+              const we = endOfWeek(new Date(), { weekStartsOn: 1 });
+              await autoGenerateTimesheet({ orgId, userId: user.id, startDate: ws.toISOString(), endDate: we.toISOString() });
+              toast.success('Timesheet updated');
+            } catch (err: unknown) {
+              logger.error('[Clock] autoGenerateTimesheet failed:', err);
+            }
+          }
+          loadTodayEntries();
+          loadWeekEntries();
+          toast.success('Clocked out!');
         } catch (err: unknown) {
-          logger.error('[Clock] autoGenerateTimesheet failed:', err);
-        }
-      }
-      loadTodayEntries();
-      loadWeekEntries();
-      toast.success('Clocked out!');
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to clock out');
-    } finally { setActionLoading(false); }
+          const error = err as Error;
+          logger.error('[Clock] clock-out failed:', error);
+          toast.error(error.message || 'Failed to clock out');
+        } finally { setActionLoading(false); }
+      },
+      onCancel: () => setConfirmDialog(p => ({ ...p, open: false })),
+    });
   };
 
+  // ─── Breaks ───
   const handleStartBreak = async () => {
     if (!currentEntry?.id) return;
     try {
@@ -717,8 +912,9 @@ export default function ClockPage() {
       setOnBreak(true);
       toast.success('Break started');
       await loadCurrentEntry();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to start break');
+    } catch (err: unknown) {
+      logger.error('[Clock] startBreak failed:', err);
+      toast.error((err as Error).message || 'Failed to start break');
     } finally { setActionLoading(false); }
   };
 
@@ -730,37 +926,45 @@ export default function ClockPage() {
       setOnBreak(false);
       toast.success('Break ended');
       await loadCurrentEntry();
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to end break');
+    } catch (err: unknown) {
+      logger.error('[Clock] endBreak failed:', err);
+      toast.error((err as Error).message || 'Failed to end break');
     } finally { setActionLoading(false); }
   };
 
+  // ─── Manual Entry (Forgot to clock in) ───
   const handleManualEntry = async (data: { clockIn: string; clockOut: string; notes: string; reason: ManualEntryReason }) => {
-    if (!orgId || !user?.id) return;
+    if (!orgId || !user?.id) {
+      toast.error('Missing org or user info');
+      throw new Error('Missing org or user info');
+    }
     try {
-      await createManualTimeEntry({
+      logger.debug('[Clock] Submitting manual entry:', { orgId, userId: user.id, clockIn: data.clockIn, clockOut: data.clockOut });
+      const result = await createManualTimeEntry({
         orgId,
         userId: user.id,
         clockInTime: data.clockIn,
         clockOutTime: data.clockOut,
-        notes: data.notes,
+        notes: `[FORGOT REQUEST - ${data.reason}] ${data.notes || ''}`.trim(),
         reason: data.reason,
         status: 'PENDING',
       });
-      loadTodayEntries();
-      loadWeekEntries();
+      logger.debug('[Clock] Manual entry created:', result);
+      // Refresh all relevant data
+      await Promise.all([loadTodayEntries(), loadWeekEntries()]);
+      if (isManager) await loadPendingEntries();
+      toast.success('Forgot clock-in request submitted for manager approval');
     } catch (err: unknown) {
-      const error = err as Error;
-      logger.error('[Clock] manual entry failed:', error);
-      throw error;
+      const msg = (err as Error).message || 'Failed to submit request';
+      logger.error('[Clock] manual entry failed:', err);
+      toast.error(`Failed: ${msg}`);
+      throw err;
     }
   };
 
-  // Summary calculations
+  // Summary
   const todayTotal = todayEntries.reduce((s, e) => s + (e.totalHours || 0), 0);
   const weekTotal = weekEntries.reduce((s, e) => s + (e.totalHours || 0), 0);
-
-  // OT thresholds from org settings (defaults)
   const otDaily = 8;
   const otWeekly = 38;
 
@@ -769,7 +973,7 @@ export default function ClockPage() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto space-y-4">
+    <div className="max-w-3xl mx-auto space-y-4 px-4 sm:px-0">
       {/* Breadcrumb */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
@@ -785,12 +989,8 @@ export default function ClockPage() {
 
       {activeTab === 'clock' ? (
         <>
-          {/* Geofence Status */}
-          <GeofenceStatus
-            position={geo.position}
-            locations={locations}
-            onNearestFound={(loc, dist) => { setNearestLoc(loc); setNearestDist(dist); }}
-          />
+          {/* Geofence Status – display only, no gating */}
+          <GeofenceStatus position={geo.position} locations={locations} />
 
           {/* Shift Info */}
           <ShiftInfoCard shift={todayShift} isClockedIn={isClockedIn} clockInTime={currentEntry?.clockIn?.time} />
@@ -825,7 +1025,14 @@ export default function ClockPage() {
                   </motion.div>
                 )}
 
-                {/* Location capture indicator */}
+                {isClockedIn && currentEntry?.clockIn?.photoBase64 && (
+                  <Badge className="bg-blue-100 text-blue-700 text-[10px] h-5 gap-1"><Camera className="size-3" />Photo Verified</Badge>
+                )}
+
+                {isClockedIn && currentEntry?.clockIn?.geofenceStatus === 'GEOFENCE_OVERRIDE' && (
+                  <Badge className="bg-red-100 text-red-700 text-[10px] h-5 gap-1"><AlertCircle className="size-3" />Outside Geofence</Badge>
+                )}
+
                 {isClockedIn && currentEntry?.clockIn?.location && (
                   <div className="flex items-center justify-center gap-1 text-xs text-slate-400">
                     <MapPin className="size-3" />
@@ -837,11 +1044,10 @@ export default function ClockPage() {
                   {!isClockedIn ? (
                     <>
                       <Button
-                        size="lg" onClick={handleClockIn} disabled={actionLoading}
+                        size="lg" onClick={initiateClockIn} disabled={actionLoading}
                         className="w-full max-w-xs h-16 text-lg bg-emerald-600 hover:bg-emerald-700"
                       >
-                        {actionLoading ? <Loader2 className="size-6 animate-spin mr-2" /> : <Play className="size-6 mr-2" />}
-                        Clock In
+                        {actionLoading ? <Loader2 className="size-6 animate-spin mr-2" /> : <><Camera className="size-5 mr-2" />Clock In</>}
                       </Button>
                       {!geo.position && geo.permission !== 'denied' && (
                         <p className="text-xs text-amber-600">Waiting for GPS location...</p>
@@ -868,7 +1074,6 @@ export default function ClockPage() {
                     </div>
                   )}
 
-                  {/* Manual entry */}
                   {!isClockedIn && (
                     <button onClick={() => setManualOpen(true)}
                       className="text-sm text-blue-600 hover:text-blue-700 flex items-center gap-1 mx-auto mt-2">
@@ -893,7 +1098,7 @@ export default function ClockPage() {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-4 gap-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="text-center p-3 bg-slate-50 rounded-lg">
                   <p className="text-2xl font-bold text-slate-800">{todayTotal.toFixed(1)}h</p>
                   <p className="text-xs text-slate-500">Total Hours</p>
@@ -945,17 +1150,28 @@ export default function ClockPage() {
         <div className="space-y-4">
           <LiveAttendance orgId={orgId || ''} employees={employees} onBulkClockOut={count => {
             setConfirmDialog({
-              open: true,
-              title: 'Bulk Clock Out',
-              description: `Clock out ${count} employees?`,
-              variant: 'destructive',
+              open: true, title: 'Bulk Clock Out', description: `Clock out ${count} employees?`, variant: 'destructive',
               onConfirm: async () => {
-                for (const entry of pendingEntries) {
-                  try { await clockOut({ entryId: entry.id, method: 'WEB', withinGeofence: true }); }
+                const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+                const active = await getTimeEntries(orgId || '', { startDate: todayStart.toISOString(), endDate: new Date().toISOString() });
+                const nowActive = active.filter(e => e.status === 'ACTIVE');
+                let successCount = 0;
+                for (const entry of nowActive.slice(0, count)) {
+                  try { await clockOut({ entryId: entry.id, method: 'WEB' }); successCount++; }
                   catch (err: unknown) { logger.error('[Clock] bulk clock out failed:', err); }
                 }
-                toast.success('Bulk clock out complete');
+                toast.success(`Clocked out ${successCount} of ${nowActive.length} employees`);
                 loadTodayEntries();
+              },
+              onCancel: () => setConfirmDialog(p => ({ ...p, open: false })),
+            });
+          }} onClockOutOne={async (entryId) => {
+            setConfirmDialog({
+              open: true, title: 'Clock Out Employee', description: 'Stop timer for this employee?', variant: 'destructive',
+              onConfirm: async () => {
+                try { await clockOut({ entryId, method: 'WEB' }); toast.success('Employee clocked out'); loadTodayEntries(); }
+                catch (err: unknown) { toast.error((err as Error).message || 'Failed'); }
+                setConfirmDialog(p => ({ ...p, open: false }));
               },
               onCancel: () => setConfirmDialog(p => ({ ...p, open: false })),
             });
@@ -973,7 +1189,10 @@ export default function ClockPage() {
               <CardContent>
                 <div className="space-y-2 max-h-64 overflow-y-auto">
                   {pendingEntries.map(entry => {
-                    const emp = employees.find(e => e.id === entry.userId || e.userId === entry.userId);
+                    const emp = employees.find(e => {
+                      const eid = typeof e.userId === 'string' ? e.userId : (e.userId as unknown as Record<string, unknown>)?._id?.toString?.() || e.userId?.toString?.() || e.id;
+                      return e.id === entry.userId || eid === entry.userId;
+                    });
                     return (
                       <div key={entry.id} className="flex items-center gap-2 p-2 bg-amber-50 rounded-lg text-sm">
                         <div className="size-8 rounded-full bg-gradient-to-br from-blue-400 to-indigo-500 flex items-center justify-center text-white text-xs font-bold shrink-0">
@@ -1009,8 +1228,13 @@ export default function ClockPage() {
         </div>
       )}
 
+      {/* Modals */}
+      <PhotoCaptureModal
+        isOpen={photoModalOpen}
+        onClose={() => setPhotoModalOpen(false)}
+        onConfirm={executeClockIn}
+      />
       <ManualEntryModal isOpen={manualOpen} onClose={() => setManualOpen(false)} onSave={handleManualEntry} />
-
       <ConfirmDialog
         isOpen={confirmDialog.open}
         title={confirmDialog.title}

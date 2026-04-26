@@ -435,10 +435,14 @@ export interface ClockEvent {
   location?: Coordinates;
   accuracy?: number;
   photoUrl?: string;
+  photoBase64?: string;
   deviceId?: string;
   ipAddress?: string;
   method: ClockMethod;
-  withinGeofence: boolean;
+  withinGeofence?: boolean;
+  geofenceStatus?: 'INSIDE' | 'GEOFENCE_OVERRIDE';
+  geofenceDistance?: number;
+  matchedLocationId?: string;
 }
 
 export interface Break {

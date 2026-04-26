@@ -246,8 +246,8 @@ export async function clockIn(data: {
   location?: { lat: number; lng: number };
   accuracy?: number;
   method: string;
-  withinGeofence: boolean;
   notes?: string;
+  photoBase64?: string;
 }): Promise<TimeEntry> {
   return apiRequest('/time-entries/clock-in', {
     method: 'POST',
@@ -260,7 +260,6 @@ export async function clockOut(data: {
   location?: { lat: number; lng: number };
   accuracy?: number;
   method: string;
-  withinGeofence: boolean;
   notes?: string;
 }): Promise<TimeEntry> {
   return apiRequest('/time-entries/clock-out', {

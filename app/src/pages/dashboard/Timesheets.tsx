@@ -1,6 +1,7 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'framer-motion';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   FileText, Download, CheckCircle2, XCircle, Clock, ChevronLeft, ChevronRight,
   Loader2, ArrowLeft, Plus, Trash2, Edit3, X, MessageSquare, Send,
@@ -27,7 +28,6 @@ import { logger } from '@/lib/logger';
 import {
   format, startOfWeek, endOfWeek, addDays, subDays,
   differenceInDays, differenceInMinutes, isSameDay, isToday,
-  addWeeks, subWeeks,
 } from 'date-fns';
 import type { TimeEntry, Employee, Timesheet, TimesheetSettings, TimeEntryComment } from '@/types';
 
@@ -148,16 +148,28 @@ function CommentDrawer({ isOpen, onClose, comments, onAdd, canAdd }: { isOpen: b
 }
 
 /* ════════════════════════════════════════════
-   ENTRY EDIT MODAL
+   ENTRY EDIT MODAL with Dispute Center
    ════════════════════════════════════════════ */
-function EntryEditModal({ isOpen, onClose, onSave, entry, ps, pe }: { isOpen: boolean; onClose: () => void; onSave: (d: Record<string, unknown>) => Promise<void>; entry: TimeEntry | null; ps: Date; pe: Date }) {
+function EntryEditModal({ isOpen, onClose, onSave, onAddComment, entry, ps, pe, canManage }: {
+  isOpen: boolean; onClose: () => void; onSave: (d: Record<string, unknown>) => Promise<void>;
+  onAddComment?: (text: string) => Promise<void>;
+  entry: TimeEntry | null; ps: Date; pe: Date; canManage?: boolean;
+}) {
+  const [tab, setTab] = useState<'details' | 'dispute'>('details');
   const [form, setForm] = useState({ date: '', clockIn: '', clockOut: '', breakMins: '30', notes: '' });
   const [saving, setSaving] = useState(false);
-  useEffect(() => {
+  const [msg, setMsg] = useState('');
+  const [sendingMsg, setSendingMsg] = useState(false);
+
+  // Reset tab when opening
+  useMemo(() => { if (isOpen) setTab('details'); }, [isOpen]);
+
+  useMemo(() => {
     if (entry) {
       setForm({ date: entry.clockIn?.time ? format(new Date(entry.clockIn.time), 'yyyy-MM-dd') : '', clockIn: entry.clockIn?.time ? format(new Date(entry.clockIn.time), 'HH:mm') : '', clockOut: entry.clockOut?.time ? format(new Date(entry.clockOut.time), 'HH:mm') : '', breakMins: '30', notes: entry.notes || '' });
     } else { setForm({ date: format(ps, 'yyyy-MM-dd'), clockIn: '09:00', clockOut: '17:00', breakMins: '30', notes: '' }); }
   }, [entry, ps]);
+
   const submit = async () => {
     if (!form.date || !form.clockIn || !form.clockOut) { toast.error('Fill all fields'); return; }
     const cin = new Date(`${form.date}T${form.clockIn}`); const cout = new Date(`${form.date}T${form.clockOut}`);
@@ -166,25 +178,95 @@ function EntryEditModal({ isOpen, onClose, onSave, entry, ps, pe }: { isOpen: bo
     try { await onSave({ clockInTime: cin.toISOString(), clockOutTime: cout.toISOString(), breakMinutes: parseInt(form.breakMins) || 0, notes: form.notes, entryId: entry?.id }); onClose(); toast.success('Saved'); }
     catch (e: unknown) { toast.error((e as Error).message); } finally { setSaving(false); }
   };
+
+  const sendMessage = async () => {
+    if (!msg.trim() || !onAddComment) return;
+    setSendingMsg(true);
+    try { await onAddComment(msg.trim()); setMsg(''); toast.success('Message sent'); }
+    catch (e: unknown) { toast.error((e as Error).message || 'Failed to send'); }
+    finally { setSendingMsg(false); }
+  };
+
   const mins = form.clockIn && form.clockOut ? differenceInMinutes(new Date(`${form.date}T${form.clockOut}`), new Date(`${form.date}T${form.clockIn}`)) - (parseInt(form.breakMins) || 0) : 0;
   const hrs = Math.max(0, mins / 60);
+
   return (
     <AnimatePresence>
       {isOpen && (
         <>
           <motion.div className="fixed inset-0 bg-black/40 z-40" onClick={onClose} initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} />
-          <motion.div className="fixed z-50 bg-white rounded-2xl shadow-2xl w-[95vw] max-w-md" style={{ left: '50%', top: '47%', transform: 'translate(-50%, -50%)' }} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}>
-            <div className="p-5 space-y-4">
-              <div className="flex items-center justify-between"><h3 className="text-lg font-semibold">{entry ? 'Edit Entry' : 'Add Entry'}</h3><button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100"><X className="size-5" /></button></div>
-              <div><label className="text-sm font-medium">Date</label><input type="date" value={form.date} min={format(ps, 'yyyy-MM-dd')} max={format(pe, 'yyyy-MM-dd')} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-sm font-medium">Clock In</label><input type="time" value={form.clockIn} onChange={e => setForm(p => ({ ...p, clockIn: e.target.value }))} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
-                <div><label className="text-sm font-medium">Clock Out</label><input type="time" value={form.clockOut} onChange={e => setForm(p => ({ ...p, clockOut: e.target.value }))} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
+          <motion.div className="fixed z-50 bg-white rounded-2xl shadow-2xl w-[95vw] max-w-lg" style={{ left: '50%', top: '8%', transform: 'translateX(-50%)', maxHeight: '85vh' }} initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }}>
+            <div className="p-5 space-y-4 overflow-y-auto" style={{ maxHeight: '85vh' }}>
+              <div className="flex items-center justify-between">
+                <h3 className="text-lg font-semibold">{entry ? 'Edit Entry' : 'Add Entry'}</h3>
+                <button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100"><X className="size-5" /></button>
               </div>
-              <div><label className="text-sm font-medium">Break (min)</label><input type="number" value={form.breakMins} onChange={e => setForm(p => ({ ...p, breakMins: e.target.value }))} min="0" max="120" step="5" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
-              <div className="p-3 bg-blue-50 rounded-lg"><p className="text-sm text-blue-700 font-medium">Total: {hrs.toFixed(1)}h</p><p className="text-xs text-blue-500">{Math.floor(hrs)}h {Math.round((hrs % 1) * 60)}m after break</p></div>
-              <div><label className="text-sm font-medium">Notes</label><textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} className="w-full mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" rows={2} /></div>
-              <div className="flex gap-2"><Button onClick={submit} disabled={saving} className="flex-1">{saving ? <Loader2 className="size-4 animate-spin" /> : (entry ? 'Save Changes' : 'Add Entry')}</Button><Button variant="outline" onClick={onClose}>Cancel</Button></div>
+
+              {/* Tabs */}
+              {entry && (
+                <div className="flex gap-2 border-b">
+                  <button onClick={() => setTab('details')} className={`px-3 py-2 text-sm font-medium border-b-2 ${tab === 'details' ? 'border-blue-500 text-blue-700' : 'border-transparent text-slate-500'}`}>Details</button>
+                  <button onClick={() => setTab('dispute')} className={`px-3 py-2 text-sm font-medium border-b-2 ${tab === 'dispute' ? 'border-blue-500 text-blue-700' : 'border-transparent text-slate-500'}`}>
+                    Dispute Center {entry.status === 'DISPUTED' && <span className="ml-1 text-[10px] bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Active</span>}
+                  </button>
+                </div>
+              )}
+
+              {tab === 'details' && (
+                <div className="space-y-4">
+                  <div><label className="text-sm font-medium">Date</label><input type="date" value={form.date} min={format(ps, 'yyyy-MM-dd')} max={format(pe, 'yyyy-MM-dd')} onChange={e => setForm(p => ({ ...p, date: e.target.value }))} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="text-sm font-medium">Clock In</label><input type="time" value={form.clockIn} onChange={e => setForm(p => ({ ...p, clockIn: e.target.value }))} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
+                    <div><label className="text-sm font-medium">Clock Out</label><input type="time" value={form.clockOut} onChange={e => setForm(p => ({ ...p, clockOut: e.target.value }))} className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
+                  </div>
+                  <div><label className="text-sm font-medium">Break (min)</label><input type="number" value={form.breakMins} onChange={e => setForm(p => ({ ...p, breakMins: e.target.value }))} min="0" max="120" step="5" className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm mt-1" /></div>
+                  <div className="p-3 bg-blue-50 rounded-lg"><p className="text-sm text-blue-700 font-medium">Total: {hrs.toFixed(1)}h</p><p className="text-xs text-blue-500">{Math.floor(hrs)}h {Math.round((hrs % 1) * 60)}m after break</p></div>
+                  <div><label className="text-sm font-medium">Notes</label><textarea value={form.notes} onChange={e => setForm(p => ({ ...p, notes: e.target.value }))} className="w-full mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm" rows={2} /></div>
+                  <div className="flex gap-2"><Button onClick={submit} disabled={saving} className="flex-1">{saving ? <Loader2 className="size-4 animate-spin" /> : (entry ? 'Save Changes' : 'Add Entry')}</Button><Button variant="outline" onClick={onClose}>Cancel</Button></div>
+                </div>
+              )}
+
+              {tab === 'dispute' && entry && (
+                <div className="space-y-3">
+                  <div className="p-3 bg-amber-50 rounded-lg border border-amber-200">
+                    <p className="text-sm text-amber-700 font-medium">Dispute Center</p>
+                    <p className="text-xs text-amber-600">Discuss this entry with {canManage ? 'the employee' : 'your manager'}.</p>
+                  </div>
+
+                  {/* Chat thread */}
+                  <div className="bg-slate-50 rounded-lg border border-slate-200 p-3 space-y-3 max-h-64 overflow-y-auto">
+                    {(!entry.comments || entry.comments.length === 0) ? (
+                      <p className="text-sm text-slate-400 text-center py-4">No messages yet. Start the conversation below.</p>
+                    ) : entry.comments.map((c, i) => (
+                      <div key={i} className={`flex gap-2 ${c.authorName?.includes('Admin') || c.authorName?.includes('Manager') ? 'flex-row' : 'flex-row-reverse'}`}>
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center text-white text-[10px] font-bold shrink-0 ${c.authorName?.includes('Admin') || c.authorName?.includes('Manager') ? 'bg-blue-500' : 'bg-emerald-500'}`}>
+                          {(c.authorName?.[0] || 'U').toUpperCase()}
+                        </div>
+                        <div className={`max-w-[75%] p-2.5 rounded-lg text-sm ${c.authorName?.includes('Admin') || c.authorName?.includes('Manager') ? 'bg-white border border-slate-200 rounded-tl-none' : 'bg-blue-50 border border-blue-100 rounded-tr-none'}`}>
+                          <p className="text-xs font-medium text-slate-500 mb-0.5">{c.authorName}</p>
+                          <p className="text-slate-700">{c.text}</p>
+                          <p className="text-[10px] text-slate-400 mt-1 text-right">{format(new Date(c.createdAt), 'MMM d, h:mm a')}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Reply input */}
+                  <div className="flex gap-2">
+                    <Input value={msg} onChange={e => setMsg(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }} placeholder="Type a message..." className="flex-1" />
+                    <Button size="sm" onClick={sendMessage} disabled={sendingMsg || !msg.trim()}><Send className="size-4" /></Button>
+                  </div>
+
+                  {/* Manager actions */}
+                  {canManage && entry.status === 'DISPUTED' && (
+                    <div className="flex gap-2 pt-2">
+                      <Button size="sm" variant="outline" className="text-emerald-600 border-emerald-200" onClick={async () => { await onSave({ entryId: entry.id, status: 'APPROVED' }); onClose(); }}>
+                        <CheckCircle2 className="size-4 mr-1" />Approve Entry
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           </motion.div>
         </>
@@ -221,7 +303,7 @@ function RejectModal({ isOpen, onClose, onReject }: { isOpen: boolean; onClose: 
    ════════════════════════════════════════════ */
 function SettingsModal({ isOpen, onClose, settings, onSave }: { isOpen: boolean; onClose: () => void; settings: TimesheetSettings; onSave: (s: TimesheetSettings) => Promise<void> }) {
   const [form, setForm] = useState<TimesheetSettings>(settings); const [saving, setSaving] = useState(false);
-  useEffect(() => { setForm(settings); }, [settings]);
+  useMemo(() => { setForm(settings); }, [settings]);
   const upd = (path: string, val: unknown) => setForm(p => { const n = { ...p }; const k = path.split('.'); let t: Record<string, unknown> = n as unknown as Record<string, unknown>; for (let i = 0; i < k.length - 1; i++) t = t[k[i]] as Record<string, unknown>; t[k[k.length - 1]] = val; return n; });
   const submit = async () => { setSaving(true); try { await onSave(form); onClose(); } catch (e: unknown) { toast.error((e as Error).message); } finally { setSaving(false); } };
   return (
@@ -249,7 +331,6 @@ function SettingsModal({ isOpen, onClose, settings, onSave }: { isOpen: boolean;
 
 /* ════════════════════════════════════════════
    COMPLIANCE PANEL
-   Checks for: missing breaks, consecutive days, overtime
    ════════════════════════════════════════════ */
 function CompliancePanel({ dayGroups, otThreshold, settings }: {
   dayGroups: { key: string; date: Date; entries: TimeEntry[] }[];
@@ -258,29 +339,20 @@ function CompliancePanel({ dayGroups, otThreshold, settings }: {
 }) {
   const issues = useMemo(() => {
     const found: { type: 'break' | 'consecutive' | 'overtime'; message: string; day?: Date }[] = [];
-
-    // Check each day
     dayGroups.forEach(dg => {
       const dayTotal = dg.entries.reduce((s, e) => s + (e.totalHours || 0), 0);
       const hasBreak = dg.entries.some(e => (e.breaks?.length || 0) > 0);
-
-      // Overtime check
       if (dayTotal > otThreshold) {
         found.push({ type: 'overtime', message: `${format(dg.date, 'EEE')}: ${dayTotal.toFixed(1)}h exceeds ${otThreshold}h threshold`, day: dg.date });
       }
-
-      // Missing break check (if worked > break threshold)
       if (dayTotal > (settings.breakRules?.autoDeductAfterHours || 5) && !hasBreak) {
         found.push({ type: 'break', message: `${format(dg.date, 'EEE')}: No break recorded after ${dayTotal.toFixed(1)}h`, day: dg.date });
       }
     });
-
-    // Consecutive days check
     const workedDays = dayGroups.filter(dg => dg.entries.length > 0);
     if (workedDays.length >= 7) {
       found.push({ type: 'consecutive', message: `${workedDays.length} consecutive days worked this period` });
     }
-
     return found;
   }, [dayGroups, otThreshold, settings]);
 
@@ -349,7 +421,7 @@ function CostReport({ entries, employees }: { entries: TimeEntry[]; employees: E
         <h4 className="text-sm font-semibold flex items-center gap-2"><BarChart3 className="size-4" />Labor Cost Report</h4>
         <button onClick={() => setShowReport(false)} className="p-1 rounded hover:bg-slate-100"><X className="size-4" /></button>
       </div>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
         <div className="p-2 bg-emerald-50 rounded text-center"><p className="text-lg font-bold text-emerald-800">${report.totalCost.toFixed(0)}</p><p className="text-[10px] text-emerald-600">Total Cost</p></div>
         <div className="p-2 bg-blue-50 rounded text-center"><p className="text-lg font-bold text-blue-800">{report.totalHours.toFixed(0)}h</p><p className="text-[10px] text-blue-600">Total Hours</p></div>
         <div className="p-2 bg-amber-50 rounded text-center"><p className="text-lg font-bold text-amber-800">${Math.max(0, report.totalOT).toFixed(0)}</p><p className="text-[10px] text-amber-600">OT Premium</p></div>
@@ -425,8 +497,9 @@ function DayBox({ dayDate, entries, isManager, onComment, onEdit, onDispute, otT
                 const hasComments = (entry.comments?.length || 0) > 0;
                 const isEdited = !!entry.lastEditedAt;
                 const isDisputed = entry.status === 'DISPUTED';
+                const isPending = entry.status === 'PENDING';
                 return (
-                  <div key={entry.id} className={`p-3 rounded-lg border ${isDisputed ? 'border-red-200 bg-red-50/30' : isOT ? 'border-amber-200 bg-amber-50/30' : 'border-slate-100 bg-slate-50/50'}`}>
+                  <div key={entry.id} className={`p-3 rounded-lg border ${isDisputed ? 'border-red-200 bg-red-50/30' : isPending ? 'border-amber-200 bg-amber-50/30' : isOT ? 'border-amber-200 bg-amber-50/30' : 'border-slate-100 bg-slate-50/50'}`}>
                     {/* Employee name (All Staff view) */}
                     {showEmployee && emp && (
                       <div className="flex items-center gap-1.5 mb-2">
@@ -436,13 +509,14 @@ function DayBox({ dayDate, entries, isManager, onComment, onEdit, onDispute, otT
                     )}
                     <div className="flex items-center justify-between">
                       <div className="flex items-center gap-2">
-                        <Clock className={`size-4 ${isDisputed ? 'text-red-500' : isOT ? 'text-amber-500' : 'text-blue-400'}`} />
+                        <Clock className={`size-4 ${isDisputed ? 'text-red-500' : isPending ? 'text-amber-500' : isOT ? 'text-amber-500' : 'text-blue-400'}`} />
                         <span className="text-sm font-medium">{cin ? format(cin, 'h:mm a') : '--:--'} – {cout ? format(cout, 'h:mm a') : '--:--'}</span>
                       </div>
                       <div className="flex items-center gap-2">
-                        <span className={`text-sm font-bold ${isDisputed ? 'text-red-600' : isOT ? 'text-amber-600' : 'text-slate-700'}`}>{hrs.toFixed(1)}h</span>
+                        <span className={`text-sm font-bold ${isDisputed ? 'text-red-600' : isPending ? 'text-amber-600' : isOT ? 'text-amber-600' : 'text-slate-700'}`}>{hrs.toFixed(1)}h</span>
                         <div className="flex items-center gap-0.5">
                           {isDisputed && <Badge className="bg-red-100 text-red-700 text-[9px] h-5">Disputed</Badge>}
+                          {isPending && <Badge className="bg-amber-100 text-amber-700 text-[9px] h-5">Pending</Badge>}
                           {hasComments && <MessageSquare className="size-3.5 text-blue-400" />}
                           {isEdited && <span title="Edited"><History className="size-3.5 text-amber-500" /></span>}
                           <button onClick={() => onComment(entry)} className="p-1 rounded hover:bg-slate-200 text-slate-400" title="Comments"><MessageSquare className="size-3.5" /></button>
@@ -473,7 +547,7 @@ function DayBox({ dayDate, entries, isManager, onComment, onEdit, onDispute, otT
 }
 
 /* ════════════════════════════════════════════
-   MAIN PAGE
+   MAIN PAGE with React Query
    ════════════════════════════════════════════ */
 export default function TimesheetsPage() {
   const { orgId } = useParams<{ orgId: string }>();
@@ -481,6 +555,7 @@ export default function TimesheetsPage() {
   const { user, currentOrg, setCurrentOrg } = useAuthStore();
   const isManager = ['ADMIN', 'OWNER', 'MANAGER'].includes(user?.role || '');
   const isAdmin = ['ADMIN', 'OWNER'].includes(user?.role || '');
+  const queryClient = useQueryClient();
 
   // Settings from org (reactive to store updates)
   const tsSettings = useMemo(() => {
@@ -489,10 +564,6 @@ export default function TimesheetsPage() {
   }, [currentOrg?.settings?.timesheetSettings]);
 
   const [currentDate, setCurrentDate] = useState(new Date());
-  const [entries, setEntries] = useState<TimeEntry[]>([]);
-  const [employees, setEmployees] = useState<Employee[]>([]);
-  const [timesheets, setTimesheets] = useState<Timesheet[]>([]);
-  const [loading, setLoading] = useState(true);
   const [selectedEmployeeId, setSelectedEmployeeId] = useState<string>('all');
   const [editEntry, setEditEntry] = useState<TimeEntry | null>(null);
   const [editOpen, setEditOpen] = useState(false);
@@ -522,28 +593,32 @@ export default function TimesheetsPage() {
 
   const isManagingOthers = isManager && selectedEmployeeId !== 'all' && selectedEmployeeId !== user?.id;
 
-  const activeTimesheet = useMemo(() => {
-    if (!viewingUserId) return null;
-    return timesheets.find(ts => ts.userId === viewingUserId && isSameDay(new Date(ts.payPeriod.start), ps)) || null;
-  }, [timesheets, viewingUserId, ps]);
-  const currentStatus = activeTimesheet?.status || 'DRAFT';
-  const tsId = activeTimesheet?.id || '';
+  // ─── React Query: Employees ───
+  const { data: employees = [], isLoading: employeesLoading } = useQuery({
+    queryKey: ['employees', orgId],
+    queryFn: () => getEmployees(orgId!),
+    enabled: !!orgId,
+    staleTime: 5 * 60 * 1000,
+  });
 
-  useEffect(() => { if (orgId && viewingUserId) loadData(); }, [orgId, currentDate, viewingUserId]);
+  // ─── React Query: Timesheets ───
+  const { data: timesheets = [], isLoading: timesheetsLoading } = useQuery({
+    queryKey: ['timesheets', orgId],
+    queryFn: () => getTimesheets(orgId!, {}),
+    enabled: !!orgId,
+    staleTime: 2 * 60 * 1000,
+  });
 
-  async function loadData() {
-    if (!orgId || !viewingUserId) return;
-    try {
-      setLoading(true);
-      const [tsList, emps] = await Promise.all([getTimesheets(orgId, {}), getEmployees(orgId)]);
-      setTimesheets(tsList); setEmployees(emps);
-
+  // ─── React Query: Time Entries ───
+  const { data: entries = [], isLoading: entriesLoading } = useQuery({
+    queryKey: ['timeEntries', orgId, viewingUserId, ps.toISOString(), pe.toISOString(), selectedEmployeeId],
+    queryFn: async () => {
+      if (!orgId || !viewingUserId) return [];
       const psStr = ps.toISOString();
       const peStr = pe.toISOString();
       const all: TimeEntry[] = [];
-
       if (isManager && selectedEmployeeId === 'all') {
-        const empIds = emps.filter(e => e.inviteStatus !== 'INVITED').map(e => getEmployeeUserId(e));
+        const empIds = employees.filter(e => e.inviteStatus !== 'INVITED').map(e => getEmployeeUserId(e));
         const uniqueIds = [...new Set(empIds)].filter(Boolean);
         for (const uid of uniqueIds.slice(0, 20)) {
           try { const ents = await getTimeEntries(orgId, { userId: uid, startDate: psStr, endDate: peStr }); all.push(...ents); }
@@ -553,10 +628,18 @@ export default function TimesheetsPage() {
         try { const ents = await getTimeEntries(orgId, { userId: viewingUserId, startDate: psStr, endDate: peStr }); all.push(...ents); }
         catch (err: unknown) { logger.error('[Timesheets] load entries failed:', err); }
       }
-      setEntries(all);
-    } catch (err: unknown) { logger.error('[Timesheets] loadData error:', err); toast.error('Failed to load'); }
-    finally { setLoading(false); }
-  }
+      return all;
+    },
+    enabled: !!orgId && !!viewingUserId,
+    staleTime: 60 * 1000,
+  });
+
+  const activeTimesheet = useMemo(() => {
+    if (!viewingUserId) return null;
+    return timesheets.find(ts => ts.userId === viewingUserId && isSameDay(new Date(ts.payPeriod.start), ps)) || null;
+  }, [timesheets, viewingUserId, ps]);
+  const currentStatus = activeTimesheet?.status || 'DRAFT';
+  const tsId = activeTimesheet?.id || '';
 
   const visibleEntries = useMemo(() => {
     if (!viewingUserId) return [];
@@ -581,8 +664,75 @@ export default function TimesheetsPage() {
 
   const totals = useMemo(() => visibleEntries.reduce((a, e) => ({ total: a.total + (e.totalHours || 0), regular: a.regular + (e.regularHours || 0), overtime: a.overtime + (e.overtimeHours || 0) }), { total: 0, regular: 0, overtime: 0 }), [visibleEntries]);
 
+  // ─── OPTIMISTIC MUTATIONS ───
+  const approveMutation = useMutation({
+    mutationFn: (id: string) => approveTimesheet(id, user?.id || ''),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['timesheets', orgId] });
+      const previous = queryClient.getQueryData<Timesheet[]>(['timesheets', orgId]);
+      queryClient.setQueryData(['timesheets', orgId], (old: Timesheet[] | undefined) => {
+        if (!old) return old;
+        return old.map(ts => ts.id === id ? { ...ts, status: 'APPROVED', approvedBy: user?.id, approvedAt: new Date().toISOString() } as Timesheet : ts);
+      });
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) queryClient.setQueryData(['timesheets', orgId], context.previous);
+      toast.error('Failed to approve');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['timesheets', orgId] });
+      queryClient.invalidateQueries({ queryKey: ['timeEntries', orgId] });
+    },
+    onSuccess: () => toast.success('Approved'),
+  });
+
+  const rejectMutation = useMutation({
+    mutationFn: ({ id, reason }: { id: string; reason: string }) => rejectTimesheet(id, reason),
+    onMutate: async ({ id, reason }) => {
+      await queryClient.cancelQueries({ queryKey: ['timesheets', orgId] });
+      const previous = queryClient.getQueryData<Timesheet[]>(['timesheets', orgId]);
+      queryClient.setQueryData(['timesheets', orgId], (old: Timesheet[] | undefined) => {
+        if (!old) return old;
+        return old.map(ts => ts.id === id ? { ...ts, status: 'REJECTED', rejectionReason: reason } as Timesheet : ts);
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['timesheets', orgId], context.previous);
+      toast.error('Failed to reject');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['timesheets', orgId] });
+      queryClient.invalidateQueries({ queryKey: ['timeEntries', orgId] });
+    },
+    onSuccess: () => toast.success('Rejected'),
+  });
+
+  const submitMutation = useMutation({
+    mutationFn: (id: string) => submitTimesheet(id),
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ['timesheets', orgId] });
+      const previous = queryClient.getQueryData<Timesheet[]>(['timesheets', orgId]);
+      queryClient.setQueryData(['timesheets', orgId], (old: Timesheet[] | undefined) => {
+        if (!old) return old;
+        return old.map(ts => ts.id === id ? { ...ts, status: 'SUBMITTED', submittedAt: new Date().toISOString() } as Timesheet : ts);
+      });
+      return { previous };
+    },
+    onError: (_err, _id, context) => {
+      if (context?.previous) queryClient.setQueryData(['timesheets', orgId], context.previous);
+      toast.error('Failed to submit');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['timesheets', orgId] });
+    },
+    onSuccess: () => toast.success('Submitted'),
+  });
+
   // ─── ACTIONS ───
-  const handleGenerate = async () => { if (!orgId || !viewingUserId) return; try { await autoGenerateTimesheet({ userId: viewingUserId, orgId, startDate: ps.toISOString(), endDate: pe.toISOString() }); toast.success('Generated'); loadData(); } catch (e: unknown) { toast.error((e as Error).message || 'Failed'); } };
+  const handleGenerate = async () => { if (!orgId || !viewingUserId) return; try { await autoGenerateTimesheet({ userId: viewingUserId, orgId, startDate: ps.toISOString(), endDate: pe.toISOString() }); toast.success('Generated'); queryClient.invalidateQueries({ queryKey: ['timesheets', orgId] }); queryClient.invalidateQueries({ queryKey: ['timeEntries', orgId] }); } catch (e: unknown) { toast.error((e as Error).message || 'Failed'); } };
+
   const handleSubmit = async () => {
     if (!tsId) { toast.error('No timesheet'); return; }
     setConfirmDialog({
@@ -590,17 +740,13 @@ export default function TimesheetsPage() {
       title: 'Submit Timesheet',
       description: 'You cannot edit after submission. Continue?',
       variant: 'default',
-      onConfirm: async () => {
-        setSubmitting(true);
-        try { await submitTimesheet(tsId); toast.success('Submitted'); loadData(); }
-        catch (e: unknown) { toast.error((e as Error).message); }
-        finally { setSubmitting(false); }
-      },
+      onConfirm: async () => { submitMutation.mutate(tsId); setConfirmDialog(p => ({ ...p, open: false })); },
       onCancel: () => setConfirmDialog(p => ({ ...p, open: false })),
     });
   };
-  const handleApprove = async () => { if (!tsId) return; try { await approveTimesheet(tsId, user?.id || ''); toast.success('Approved'); loadData(); } catch (e: unknown) { toast.error((e as Error).message); } };
-  const handleReject = async (reason: string) => { if (!tsId) return; try { await rejectTimesheet(tsId, reason); toast.success('Rejected'); loadData(); } catch (e: unknown) { toast.error((e as Error).message); } };
+
+  const handleApprove = async () => { if (!tsId) return; approveMutation.mutate(tsId); };
+  const handleReject = async (reason: string) => { if (!tsId) return; rejectMutation.mutate({ id: tsId, reason }); };
 
   const handleSaveSettings = async (newSettings: TimesheetSettings) => {
     if (!orgId) return;
@@ -659,7 +805,11 @@ export default function TimesheetsPage() {
 
   // ─── COMMENTS ───
   const handleAddComment = async (entryId: string, text: string) => {
-    try { await addTimeEntryComment(entryId, text); toast.success('Comment saved'); loadData(); }
+    try {
+      await addTimeEntryComment(entryId, text);
+      toast.success('Comment saved');
+      queryClient.invalidateQueries({ queryKey: ['timeEntries', orgId] });
+    }
     catch (e: unknown) { toast.error((e as Error).message || 'Failed to save comment'); }
   };
 
@@ -667,7 +817,11 @@ export default function TimesheetsPage() {
   const handleEditEntry = async (data: Record<string, unknown>) => {
     const entryId = data.entryId as string;
     if (!entryId) { toast.success('Entry added (demo mode)'); return; }
-    try { await updateTimeEntry(entryId, data); toast.success('Entry updated'); loadData(); }
+    try {
+      await updateTimeEntry(entryId, data);
+      toast.success('Entry updated');
+      queryClient.invalidateQueries({ queryKey: ['timeEntries', orgId] });
+    }
     catch (e: unknown) { toast.error((e as Error).message || 'Failed to update'); }
   };
 
@@ -679,8 +833,13 @@ export default function TimesheetsPage() {
       description: 'Flag this entry for manager review?',
       variant: 'default',
       onConfirm: async () => {
-        try { await updateTimeEntry(entry.id, { status: 'DISPUTED', notes: `${entry.notes || ''} [DISPUTED]`.trim() }); toast.success('Entry disputed'); loadData(); }
+        try {
+          await updateTimeEntry(entry.id, { status: 'DISPUTED', notes: `${entry.notes || ''} [DISPUTED]`.trim() });
+          toast.success('Entry disputed');
+          queryClient.invalidateQueries({ queryKey: ['timeEntries', orgId] });
+        }
         catch (e: unknown) { toast.error((e as Error).message || 'Failed'); }
+        setConfirmDialog(p => ({ ...p, open: false }));
       },
       onCancel: () => setConfirmDialog(p => ({ ...p, open: false })),
     });
@@ -695,6 +854,30 @@ export default function TimesheetsPage() {
     });
   };
 
+  const batchApproveMutation = useMutation({
+    mutationFn: async (ids: string[]) => {
+      for (const id of ids) { await approveTimesheet(id, user?.id || ''); }
+    },
+    onMutate: async (ids) => {
+      await queryClient.cancelQueries({ queryKey: ['timesheets', orgId] });
+      const previous = queryClient.getQueryData<Timesheet[]>(['timesheets', orgId]);
+      queryClient.setQueryData(['timesheets', orgId], (old: Timesheet[] | undefined) => {
+        if (!old) return old;
+        return old.map(ts => ids.includes(ts.id) ? { ...ts, status: 'APPROVED', approvedBy: user?.id, approvedAt: new Date().toISOString() } as Timesheet : ts);
+      });
+      return { previous };
+    },
+    onError: (_err, _vars, context) => {
+      if (context?.previous) queryClient.setQueryData(['timesheets', orgId], context.previous);
+      toast.error('Batch approve failed');
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['timesheets', orgId] });
+      queryClient.invalidateQueries({ queryKey: ['timeEntries', orgId] });
+    },
+    onSuccess: (_d, ids) => { toast.success(`${ids.length} approved`); setBatchSelected(new Set()); setBatchMode(false); },
+  });
+
   const handleBatchApprove = async () => {
     if (batchSelected.size === 0) return;
     setConfirmDialog({
@@ -703,13 +886,8 @@ export default function TimesheetsPage() {
       description: `Approve ${batchSelected.size} timesheets?`,
       variant: 'default',
       onConfirm: async () => {
-        for (const id of batchSelected) {
-          try { await approveTimesheet(id, user?.id || ''); } catch (err: unknown) { logger.error('[Timesheets] batch approve failed:', err); }
-        }
-        toast.success(`${batchSelected.size} approved`);
-        setBatchSelected(new Set());
-        setBatchMode(false);
-        loadData();
+        batchApproveMutation.mutate([...batchSelected]);
+        setConfirmDialog(p => ({ ...p, open: false }));
       },
       onCancel: () => setConfirmDialog(p => ({ ...p, open: false })),
     });
@@ -717,6 +895,8 @@ export default function TimesheetsPage() {
 
   const openComments = (e: TimeEntry) => { setCommentEntry(e); setCommentOpen(true); };
   const selectedEmployee = employees.find(e => getEmployeeUserId(e) === selectedEmployeeId);
+
+  const loading = employeesLoading || timesheetsLoading || entriesLoading;
 
   if (loading) return <div className="flex items-center justify-center h-64"><Loader2 className="size-8 animate-spin text-blue-600" /></div>;
 
@@ -784,14 +964,14 @@ export default function TimesheetsPage() {
           {/* Actions */}
           <div className="flex items-center gap-2 flex-wrap">
             {!isManager && currentStatus === 'DRAFT' && (
-              <Button size="sm" onClick={handleSubmit} disabled={submitting || visibleEntries.length === 0}>{submitting ? <Loader2 className="size-4 animate-spin" /> : <><Send className="size-4 mr-1" />Submit Timesheet</>}</Button>
+              <Button size="sm" onClick={handleSubmit} disabled={submitting || visibleEntries.length === 0 || submitMutation.isPending}>{submitting || submitMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <><Send className="size-4 mr-1" />Submit Timesheet</>}</Button>
             )}
             {isManager && isManagingOthers && currentStatus === 'DRAFT' && (
               <Button size="sm" variant="outline" onClick={() => { setEditEntry(null); setEditOpen(true); }}><Plus className="size-4 mr-1" />Add Entry</Button>
             )}
             {isManager && isManagingOthers && currentStatus === 'SUBMITTED' && (
-              <><Button size="sm" onClick={handleApprove} className="bg-emerald-600 hover:bg-emerald-700"><CheckCircle2 className="size-4 mr-1" />Approve</Button>
-              <Button size="sm" variant="destructive" onClick={() => setRejectOpen(true)}><XCircle className="size-4 mr-1" />Reject</Button></>
+              <><Button size="sm" onClick={handleApprove} disabled={approveMutation.isPending} className="bg-emerald-600 hover:bg-emerald-700">{approveMutation.isPending ? <Loader2 className="size-4 animate-spin" /> : <><CheckCircle2 className="size-4 mr-1" />Approve</>}</Button>
+              <Button size="sm" variant="destructive" onClick={() => setRejectOpen(true)} disabled={rejectMutation.isPending}><XCircle className="size-4 mr-1" />Reject</Button></>
             )}
             {isManager && isManagingOthers && visibleEntries.length === 0 && (
               <Button size="sm" variant="outline" onClick={handleGenerate}><Plus className="size-4 mr-1" />Generate from Clock Data</Button>
@@ -814,14 +994,14 @@ export default function TimesheetsPage() {
           {batchMode && batchSelected.size > 0 && (
             <motion.div className="flex items-center gap-2 p-2 bg-blue-50 rounded-lg border border-blue-200" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
               <span className="text-sm text-blue-700">{batchSelected.size} selected</span>
-              <Button size="sm" onClick={handleBatchApprove} className="h-7 text-xs bg-emerald-600"><CheckCircle2 className="size-3 mr-1" />Approve</Button>
+              <Button size="sm" onClick={handleBatchApprove} disabled={batchApproveMutation.isPending} className="h-7 text-xs bg-emerald-600">{batchApproveMutation.isPending ? <Loader2 className="size-3 animate-spin" /> : <><CheckCircle2 className="size-3 mr-1" />Approve</>}</Button>
               <Button size="sm" variant="ghost" onClick={() => setBatchSelected(new Set())} className="h-7 text-xs">Clear</Button>
             </motion.div>
           )}
 
           {/* Totals */}
           {visibleEntries.length > 0 && (
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <Card><CardContent className="p-3 text-center"><p className="text-2xl font-bold text-slate-800">{totals.total.toFixed(1)}h</p><p className="text-xs text-slate-500">Total</p></CardContent></Card>
               <Card><CardContent className="p-3 text-center"><p className="text-2xl font-bold text-blue-600">{totals.regular.toFixed(1)}h</p><p className="text-xs text-slate-500">Regular</p></CardContent></Card>
               <Card><CardContent className="p-3 text-center"><p className="text-2xl font-bold text-amber-600">{totals.overtime.toFixed(1)}h</p><p className="text-xs text-slate-500">Overtime</p></CardContent></Card>
@@ -863,7 +1043,7 @@ export default function TimesheetsPage() {
         comments={commentEntry?.comments || []}
         onAdd={t => commentEntry && handleAddComment(commentEntry.id, t)}
         canAdd={currentStatus === 'DRAFT' || currentStatus === 'REJECTED'} />
-      <EntryEditModal isOpen={editOpen} onClose={() => setEditOpen(false)} onSave={handleEditEntry} entry={editEntry} ps={ps} pe={pe} />
+      <EntryEditModal isOpen={editOpen} onClose={() => setEditOpen(false)} onSave={handleEditEntry} onAddComment={editEntry ? async (text) => { await handleAddComment(editEntry.id, text); } : undefined} entry={editEntry} ps={ps} pe={pe} canManage={isManager} />
       <RejectModal isOpen={rejectOpen} onClose={() => setRejectOpen(false)} onReject={handleReject} />
       <SettingsModal isOpen={settingsOpen} onClose={() => setSettingsOpen(false)} settings={tsSettings} onSave={handleSaveSettings} />
 

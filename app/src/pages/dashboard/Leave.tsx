@@ -1,5 +1,5 @@
 // ClockMate Pro - Leave Management Page
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { 
   Briefcase, 
@@ -10,7 +10,9 @@ import {
   Loader2,
   Search,
   Filter,
-  ArrowLeft
+  ArrowLeft,
+  TrendingUp,
+  Clock
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -23,14 +25,15 @@ import {
   getLeaveTypes, 
   getLeaveBalances, 
   getLeaveRequests, 
+  getTimeEntries,
   createLeaveRequest,
   approveLeaveRequest,
   rejectLeaveRequest
 } from '@/lib/api';
 import { useLeaveStore, useAuthStore } from '@/store';
 import { toast } from 'sonner';
-import { format, differenceInCalendarDays } from 'date-fns';
-import type { LeaveRequest, LeaveBalance } from '@/types';
+import { format, differenceInCalendarDays, startOfYear } from 'date-fns';
+import type { LeaveRequest, LeaveBalance, TimeEntry } from '@/types';
 
 export default function LeavePage() {
   const { orgId } = useParams<{ orgId: string }>();
@@ -64,6 +67,9 @@ export default function LeavePage() {
   // Approval filter
   const [approvalFilter, setApprovalFilter] = useState('PENDING');
 
+  // Accrued leave calculation (AU: 7.69% of hours worked)
+  const [yearHoursWorked, setYearHoursWorked] = useState(0);
+
   const isManager = ['ADMIN', 'OWNER', 'MANAGER'].includes(user?.role || '');
 
   useEffect(() => {
@@ -91,6 +97,18 @@ export default function LeavePage() {
       }
       const requests = await getLeaveRequests(orgId, requestFilters);
       setLeaveRequests(requests);
+
+      // Calculate accrued leave from completed time entries this year
+      try {
+        const yearStart = startOfYear(new Date()).toISOString();
+        const now = new Date().toISOString();
+        const entries = await getTimeEntries(orgId, { userId: user.id, startDate: yearStart, endDate: now });
+        const completed = entries.filter((e: TimeEntry) => e.status === 'COMPLETED');
+        const totalHours = completed.reduce((sum: number, e: TimeEntry) => sum + (e.totalHours || 0), 0);
+        setYearHoursWorked(totalHours);
+      } catch (err) {
+        console.error('[Leave] Failed to load time entries for accrual:', err);
+      }
     } catch (error) {
       toast.error('Failed to load leave data');
     } finally {
@@ -261,7 +279,7 @@ export default function LeavePage() {
               </div>
               
               {/* Date Range */}
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="text-sm font-medium">Start Date *</label>
                   <input
@@ -396,6 +414,25 @@ export default function LeavePage() {
 
         {/* Balances Tab */}
         <TabsContent value="balances" className="space-y-4 mt-4">
+          {/* AU Accrual Info Card */}
+          <Card className="bg-blue-50/50 border-blue-200">
+            <CardContent className="pt-4 pb-3">
+              <div className="flex items-center gap-3">
+                <div className="size-10 rounded-lg bg-blue-100 flex items-center justify-center text-blue-600">
+                  <TrendingUp className="size-5" />
+                </div>
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-slate-800">Annual Leave Accrual</p>
+                  <p className="text-xs text-slate-500">
+                    {yearHoursWorked.toFixed(1)}h worked this year · 
+                    <span className="text-blue-700 font-medium"> {(yearHoursWorked * 0.0769 / 7.6).toFixed(2)} days accrued</span>
+                  </p>
+                  <p className="text-[10px] text-slate-400 mt-0.5">Australia standard: 7.69% of hours worked = annual leave entitlement</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
           {leaveBalances.length === 0 ? (
             <Card>
               <CardContent className="pt-6 text-center py-12">
@@ -406,53 +443,64 @@ export default function LeavePage() {
             </Card>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {leaveBalances.map(balance => (
-                <Card key={balance.id} className="hover:shadow-md transition-shadow">
-                  <CardContent className="pt-6">
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3">
-                        <div 
-                          className="size-12 rounded-xl flex items-center justify-center"
-                          style={{ 
-                            backgroundColor: (balance.leaveType?.color || '#3b82f6') + '20', 
-                            color: balance.leaveType?.color || '#3b82f6' 
-                          }}
-                        >
-                          <Briefcase className="size-6" />
+              {leaveBalances.map(balance => {
+                const isAnnual = balance.leaveType?.type === 'ANNUAL' || balance.leaveType?.name?.toLowerCase().includes('annual');
+                const computedAccrued = isAnnual ? (yearHoursWorked * 0.0769 / 7.6) : 0;
+                const displayAvailable = isAnnual ? Math.max(0, computedAccrued - (balance.usedDays || 0) - (balance.pendingDays || 0)) : (balance.availableDays || 0);
+                return (
+                  <Card key={balance.id} className="hover:shadow-md transition-shadow">
+                    <CardContent className="pt-6">
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div 
+                            className="size-12 rounded-xl flex items-center justify-center"
+                            style={{ 
+                              backgroundColor: (balance.leaveType?.color || '#3b82f6') + '20', 
+                              color: balance.leaveType?.color || '#3b82f6' 
+                            }}
+                          >
+                            <Briefcase className="size-6" />
+                          </div>
+                          <div>
+                            <p className="font-semibold">{balance.leaveType?.name || 'Unknown'}</p>
+                            <p className="text-sm text-slate-500">
+                              {balance.leaveType?.isPaid ? 'Paid' : 'Unpaid'} Leave
+                            </p>
+                          </div>
                         </div>
-                        <div>
-                          <p className="font-semibold">{balance.leaveType?.name || 'Unknown'}</p>
-                          <p className="text-sm text-slate-500">
-                            {balance.leaveType?.isPaid ? 'Paid' : 'Unpaid'} Leave
-                          </p>
+                        <div className="text-right">
+                          <p className="text-3xl font-bold text-slate-800">{isAnnual ? displayAvailable.toFixed(1) : balance.availableDays}</p>
+                          <p className="text-xs text-slate-500">days available</p>
                         </div>
                       </div>
-                      <div className="text-right">
-                        <p className="text-3xl font-bold text-slate-800">{balance.availableDays}</p>
-                        <p className="text-xs text-slate-500">days available</p>
+                      
+                      <div className="space-y-3">
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Entitlement: <strong>{balance.entitlementDays} days</strong></span>
+                          <span className="text-slate-500">Used: <strong className="text-amber-600">{balance.usedDays} days</strong></span>
+                        </div>
+                        <div className="flex justify-between text-sm">
+                          <span className="text-slate-500">Pending: <strong className="text-amber-600">{balance.pendingDays} days</strong></span>
+                          <span className="text-slate-500">Carried Over: <strong className="text-emerald-600">{balance.carriedOverDays || 0} days</strong></span>
+                        </div>
+                        {isAnnual && computedAccrued > 0 && (
+                          <div className="flex justify-between text-sm">
+                            <span className="text-slate-500">Accrued this year: <strong className="text-blue-600">{computedAccrued.toFixed(2)} days</strong></span>
+                            <span className="text-xs text-slate-400">({yearHoursWorked.toFixed(0)}h × 7.69%)</span>
+                          </div>
+                        )}
+                        <Progress 
+                          value={balance.entitlementDays > 0 ? ((balance.usedDays + balance.pendingDays) / balance.entitlementDays) * 100 : 0} 
+                          className="h-2.5"
+                        />
+                        <p className="text-xs text-slate-400 text-right">
+                          {balance.entitlementDays > 0 ? Math.round(((balance.usedDays + balance.pendingDays) / balance.entitlementDays) * 100) : 0}% used
+                        </p>
                       </div>
-                    </div>
-                    
-                    <div className="space-y-3">
-                      <div className="flex justify-between text-sm">
-                        <span className="text-slate-500">Entitlement: <strong>{balance.entitlementDays} days</strong></span>
-                        <span className="text-slate-500">Used: <strong className="text-amber-600">{balance.usedDays} days</strong></span>
-                      </div>
-                      <div className="flex justify-between text-sm">
-                        <span className="text-slate-500">Pending: <strong className="text-amber-600">{balance.pendingDays} days</strong></span>
-                        <span className="text-slate-500">Carried Over: <strong className="text-emerald-600">{balance.carriedOverDays || 0} days</strong></span>
-                      </div>
-                      <Progress 
-                        value={balance.entitlementDays > 0 ? ((balance.usedDays + balance.pendingDays) / balance.entitlementDays) * 100 : 0} 
-                        className="h-2.5"
-                      />
-                      <p className="text-xs text-slate-400 text-right">
-                        {balance.entitlementDays > 0 ? Math.round(((balance.usedDays + balance.pendingDays) / balance.entitlementDays) * 100) : 0}% used
-                      </p>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+                  </Card>
+                );
+              })}
             </div>
           )}
         </TabsContent>

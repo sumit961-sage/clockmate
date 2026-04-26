@@ -114,7 +114,6 @@ export function useClock(): UseClockReturn {
         location: position,
         accuracy: geo.position?.accuracy,
         method,
-        withinGeofence: true,
       });
 
       setCurrentTimeEntry(entry);
@@ -146,7 +145,6 @@ export function useClock(): UseClockReturn {
         location: position,
         accuracy: geo.position?.accuracy,
         method,
-        withinGeofence: true,
       });
 
       setCurrentTimeEntry(null);
