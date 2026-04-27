@@ -1,247 +1,190 @@
-# ClockMate Pro - Enterprise Workforce Management System
+ClockMate Pro ⏱️
+Enterprise Shift Management & Payroll Compliance System
+Victoria University — Information Technology Project
 
-A full-stack enterprise workforce management platform with intelligent time tracking, GPS geofencing, shift scheduling, leave management, and automated timesheet processing.
+---
 
-## 🚀 Live Demo
+OVERVIEW
+ClockMate Pro is a production-ready workforce management platform designed for high-turnover, shift-based environments such as hospitality, retail, and healthcare.
 
-**Frontend:** https://sp76r4rkdqzvc.ok.kimi.link
+It combines secure attendance tracking, intelligent scheduling, and automated payroll compliance aligned with Australian Fair Work regulations.
 
-## 📋 Demo Credentials
+The system emphasizes data integrity, fraud prevention, and real-time operational efficiency through a modern full-stack architecture.
 
-Use any of these accounts to test different roles:
+---
 
-| Role | Email | Password |
-|------|-------|----------|
-| Owner | `owner@clockmate.com` | `password123` |
-| Admin | `admin@clockmate.com` | `password123` |
-| Manager | `manager@clockmate.com` | `password123` |
-| Employee | `employee@clockmate.com` | `password123` |
+CORE FEATURES
 
-## ✨ Features
+Smart Attendance System
 
-### Core Modules
-- **Multi-Organization Architecture** - Support for unlimited organizations with complete data isolation
-- **RBAC (Role-Based Access Control)** - 5 user roles: Owner, Admin, Manager, Employee, Observer
-- **Clock In/Out System** - GPS geofencing, real-time tracking, break management
-- **Shift Scheduling** - Weekly calendar view, recurring shifts, conflict detection
-- **Timesheet Management** - Auto-generation, approval workflows, payroll export
-- **Leave Management** - Balance tracking, request workflows, approval chains
-- **Employee Management** - Profiles, departments, certifications, documents
-- **Location Management** - Multiple sites, geofence configuration, QR codes
-- **Analytics Dashboard** - Attendance trends, hours breakdown, team performance
+* Secure geofenced clock-in and clock-out using the Haversine formula
+* Photo verification (Base64 compressed) to prevent buddy punching
+* Server-side validation to eliminate client-side spoofing
 
-## 🛠️ Tech Stack
+Advanced Scheduling
 
-### Frontend
-- React 18 + TypeScript
-- Vite (build tool)
-- Tailwind CSS
-- shadcn/ui components
-- Zustand (state management)
-- TanStack Query (data fetching)
-- Recharts (charts)
-- React Router v6
+* Interactive drag-and-drop shift planner
+* Real-time conflict detection
+* Export schedules directly to PDF
+* Mobile-first responsive design
 
-### Backend
-- Node.js 20+ with ES Modules
-- Express.js
-- MongoDB with Mongoose
-- JWT Authentication
-- bcryptjs (password hashing)
+Fair Work Compliance Automation
 
-## 📁 Project Structure
+* Automatic leave accrual (7.69%) based on hours worked
+* Built-in penalty rate calculations:
+  Sunday shifts → 1.5x pay
+  Public holidays → 2.25x pay
+* Fully enforced on the server side for accuracy and compliance
 
-```
-/mnt/okcomputer/output/
-├── app/                    # Frontend React application
+Dispute Center
+
+* Integrated communication system between employees and managers
+* Resolve timesheet issues before payroll processing
+* Improves transparency and reduces payroll errors
+
+Performance Optimization
+
+* Powered by TanStack React Query
+* Optimistic UI updates
+* Background data caching
+* Smooth, zero-flicker user experience
+
+Timezone Enforcement
+
+* Hardcoded Australia/Sydney timezone using date-fns-tz
+* Prevents manipulation via device clock changes
+
+---
+
+PROJECT ARCHITECTURE
+
+clockmate/
+├── app/                        Frontend (Vite + React + TypeScript + Tailwind)
 │   ├── src/
-│   │   ├── components/     # React components
-│   │   ├── pages/          # Page components
-│   │   ├── hooks/          # Custom React hooks
-│   │   ├── store/          # Zustand stores
-│   │   ├── lib/            # API client and utilities
-│   │   └── types/          # TypeScript type definitions
-│   └── dist/               # Built frontend assets
+│   │   ├── components/         Reusable UI components
+│   │   ├── hooks/              Custom hooks
+│   │   ├── lib/                API client and utilities
+│   │   └── pages/dashboard/    Core modules
+│   │       ├── Clock.tsx       Attendance and photo capture
+│   │       ├── Schedule.tsx    Shift management
+│   │       ├── Timesheets.tsx  Dispute center
+│   │       ├── Leave.tsx       Leave tracking
+│   │       └── Payslips.tsx    Payroll viewing
 │
-└── backend/                # Node.js/Express backend
-    ├── src/
-    │   ├── models/         # Mongoose models
-    │   ├── routes/         # API routes
-    │   ├── middleware/     # Express middleware
-    │   └── config/         # Configuration files
-    └── server.js           # Entry point
-```
+├── backend/                    Backend (Node.js + Express + MongoDB)
+│   ├── src/
+│   │   ├── models/             Database schemas
+│   │   ├── middleware/         Authentication and authorization
+│   │   ├── utils/              Haversine calculations
+│   │   └── routes/             API endpoints
+│
+└── README.md
 
-## 🚀 Getting Started
+---
 
-### Prerequisites
-- Node.js 20+ 
-- MongoDB (local or Atlas)
+LOCAL SETUP INSTRUCTIONS
 
-### 1. Clone and Setup
+Prerequisites
 
-```bash
-# Navigate to the project directory
-cd /mnt/okcomputer/output
-```
+* Node.js version 18 or higher
+* MongoDB Atlas account or local MongoDB instance
 
-### 2. Backend Setup
+Database Setup
 
-```bash
-# Navigate to backend directory
-cd backend
+1. Create a MongoDB cluster
+2. Create a database user
+3. Allow network access (0.0.0.0/0 for development)
+4. Copy your connection string
 
-# Install dependencies
-npm install
+Example:
+mongodb+srv://username:password@cluster0.mongodb.net/clockmate
 
-# Configure environment variables
-# Edit .env file with your MongoDB URI:
-# MONGODB_URI=mongodb://localhost:27017/clockmate
-# Or use MongoDB Atlas:
-# MONGODB_URI=mongodb+srv://username:password@cluster.mongodb.net/clockmate
+---
 
-# Start the backend server
-npm run dev
-```
+BACKEND SETUP
 
-The backend will start on `http://localhost:3001`
+1. Navigate to backend folder
+   cd backend
 
-### 3. Frontend Setup
+2. Install dependencies
+   npm install
 
-```bash
-# Navigate to frontend directory
-cd ../app
+3. Create .env file
 
-# Install dependencies (if not already installed)
-npm install
-
-# Configure API URL
-# Edit .env file:
-# VITE_API_URL=http://localhost:3001/api
-
-# Start the development server
-npm run dev
-```
-
-The frontend will start on `http://localhost:5173`
-
-### 4. Build for Production
-
-```bash
-# Build frontend
-cd app
-npm run build
-
-# The built files will be in app/dist/
-```
-
-## 🔌 API Endpoints
-
-### Authentication
-- `POST /api/auth/register` - Register new user
-- `POST /api/auth/login` - Login
-- `GET /api/auth/me` - Get current user
-
-### Organizations
-- `GET /api/orgs` - Get user's organizations
-- `POST /api/orgs` - Create organization
-- `GET /api/orgs/:id` - Get organization by ID
-- `PUT /api/orgs/:id` - Update organization
-
-### Employees
-- `GET /api/employees?orgId=` - Get employees
-- `POST /api/employees` - Create employee
-- `GET /api/employees/:id` - Get employee by ID
-- `PUT /api/employees/:id` - Update employee
-- `DELETE /api/employees/:id` - Deactivate employee
-
-### Locations
-- `GET /api/locations?orgId=` - Get locations
-- `POST /api/locations` - Create location
-- `GET /api/locations/:id` - Get location by ID
-- `PUT /api/locations/:id` - Update location
-- `DELETE /api/locations/:id` - Deactivate location
-
-### Shifts
-- `GET /api/shifts?orgId=` - Get shifts
-- `POST /api/shifts` - Create shift
-- `GET /api/shifts/:id` - Get shift by ID
-- `PUT /api/shifts/:id` - Update shift
-- `DELETE /api/shifts/:id` - Cancel shift
-
-### Time Entries
-- `GET /api/time-entries?orgId=` - Get time entries
-- `POST /api/time-entries/clock-in` - Clock in
-- `POST /api/time-entries/clock-out` - Clock out
-- `POST /api/time-entries/:id/break-start` - Start break
-- `POST /api/time-entries/:id/break-end` - End break
-- `GET /api/time-entries/current/:userId` - Get current active entry
-
-### Timesheets
-- `GET /api/timesheets?orgId=` - Get timesheets
-- `POST /api/timesheets` - Create timesheet
-- `POST /api/timesheets/:id/submit` - Submit timesheet
-- `POST /api/timesheets/:id/approve` - Approve timesheet
-- `POST /api/timesheets/:id/reject` - Reject timesheet
-
-### Leave
-- `GET /api/leave/types?orgId=` - Get leave types
-- `POST /api/leave/types` - Create leave type
-- `GET /api/leave/balances/:userId` - Get leave balances
-- `GET /api/leave/requests?orgId=` - Get leave requests
-- `POST /api/leave/requests` - Create leave request
-- `POST /api/leave/requests/:id/approve` - Approve request
-- `POST /api/leave/requests/:id/reject` - Reject request
-
-### Dashboard
-- `GET /api/dashboard/admin/:orgId` - Admin dashboard data
-- `GET /api/dashboard/manager/:orgId` - Manager dashboard data
-- `GET /api/dashboard/employee/:orgId/:userId` - Employee dashboard data
-
-## 🔐 Environment Variables
-
-### Backend (.env)
-```
 PORT=3001
-MONGODB_URI=mongodb://localhost:27017/clockmate
-JWT_SECRET=your-secret-key-here
-NODE_ENV=development
-```
+MONGODB_URI=your_connection_string
+JWT_SECRET=your_secret_key
 
-### Frontend (.env)
-```
+4. Start server
+   npm run dev
+
+---
+
+FRONTEND SETUP
+
+1. Navigate to app folder
+   cd app
+
+2. Install dependencies
+   npm install
+
+3. Create .env file
+
 VITE_API_URL=http://localhost:3001/api
-```
 
-## 📱 Mobile Support
+4. Start development server
+   npm run dev
 
-The application is fully responsive and works on mobile devices. For production deployment, consider:
-- Adding PWA support with service workers
-- Implementing push notifications
-- Adding biometric authentication
+Application will run at:
+http://localhost:5173
 
-## 🚀 Deployment
+---
 
-### Frontend (Static Hosting)
-The frontend can be deployed to any static hosting service:
-- Vercel
-- Netlify
-- GitHub Pages
-- AWS S3 + CloudFront
+MOBILE APP CONVERSION (CAPACITOR)
 
-### Backend (Node.js Hosting)
-The backend requires a Node.js runtime environment:
-- Heroku
-- Railway
-- Render
-- AWS EC2 / ECS
-- Digital Ocean
-- MongoDB Atlas for database
+Step 1: Install Capacitor
+npm install @capacitor/core @capacitor/cli
+npm install @capacitor/ios @capacitor/android
 
-## 📝 License
+Initialize project
+npx cap init ClockMate com.victoriauni.clockmate
 
-MIT License - feel free to use this project for personal or commercial purposes.
+---
 
-## 🤝 Contributing
+Step 2: Configure Build
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+Ensure capacitor.config.ts includes:
+
+appId: com.victoriauni.clockmate
+appName: ClockMate Pro
+webDir: dist
+
+---
+
+Step 3: Build and Sync
+
+npm run build
+npx cap add android
+npx cap add ios
+npx cap sync
+
+---
+
+Step 4: Run on Device
+
+npx cap open android
+or
+npx cap open ios
+
+Install required plugins
+npm install @capacitor/camera @capacitor/geolocation
+
+---
+
+SUMMARY
+
+ClockMate Pro delivers a secure, scalable, and compliant workforce management solution tailored for Australian businesses.
+
+By combining modern frontend technologies with a robust backend system, it ensures accuracy, efficiency, and a seamless user experience across both web and mobile platforms.
+
+---
