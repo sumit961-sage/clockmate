@@ -1,190 +1,182 @@
-ClockMate Pro ⏱️
-Enterprise Shift Management & Payroll Compliance System
-Victoria University — Information Technology Project
+ClockMate Pro ⏱️  
+Enterprise Shift Management & Payroll Compliance System  
+Victoria University — Information Technology Project  
 
----
+------------------------------------------------------------
 
-OVERVIEW
-ClockMate Pro is a production-ready workforce management platform designed for high-turnover, shift-based environments such as hospitality, retail, and healthcare.
+OVERVIEW  
+ClockMate Pro is a production-ready workforce management platform designed for high-turnover, shift-based environments such as hospitality, retail, and healthcare.  
 
-It combines secure attendance tracking, intelligent scheduling, and automated payroll compliance aligned with Australian Fair Work regulations.
+It combines secure attendance tracking, intelligent scheduling, and automated payroll compliance aligned with Australian Fair Work regulations.  
 
-The system emphasizes data integrity, fraud prevention, and real-time operational efficiency through a modern full-stack architecture.
+The system emphasizes data integrity, fraud prevention, and real-time operational efficiency through a modern full-stack architecture.  
 
----
+------------------------------------------------------------
 
-CORE FEATURES
+CORE FEATURES  
 
-Smart Attendance System
+Smart Attendance System  
+- Secure geofenced clock-in and clock-out using the Haversine formula  
+- Photo verification (Base64 compressed) to prevent buddy punching  
+- Server-side validation to eliminate client-side spoofing  
 
-* Secure geofenced clock-in and clock-out using the Haversine formula
-* Photo verification (Base64 compressed) to prevent buddy punching
-* Server-side validation to eliminate client-side spoofing
+Advanced Scheduling  
+- Interactive drag-and-drop shift planner  
+- Real-time conflict detection  
+- Export schedules directly to PDF  
+- Mobile-first responsive design  
 
-Advanced Scheduling
+Fair Work Compliance Automation  
+- Automatic leave accrual (7.69%) based on hours worked  
+- Built-in penalty rate calculations:  
+  Sunday shifts → 1.5x pay  
+  Public holidays → 2.25x pay  
+- Fully enforced on the server side for accuracy and compliance  
 
-* Interactive drag-and-drop shift planner
-* Real-time conflict detection
-* Export schedules directly to PDF
-* Mobile-first responsive design
+Dispute Center  
+- Integrated communication system between employees and managers  
+- Resolve timesheet issues before payroll processing  
+- Improves transparency and reduces payroll errors  
 
-Fair Work Compliance Automation
+Performance Optimization  
+- Powered by TanStack React Query  
+- Optimistic UI updates  
+- Background data caching  
+- Smooth, zero-flicker user experience  
 
-* Automatic leave accrual (7.69%) based on hours worked
-* Built-in penalty rate calculations:
-  Sunday shifts → 1.5x pay
-  Public holidays → 2.25x pay
-* Fully enforced on the server side for accuracy and compliance
+Timezone Enforcement  
+- Hardcoded Australia/Sydney timezone using date-fns-tz  
+- Prevents manipulation via device clock changes  
 
-Dispute Center
+------------------------------------------------------------
 
-* Integrated communication system between employees and managers
-* Resolve timesheet issues before payroll processing
-* Improves transparency and reduces payroll errors
+PROJECT ARCHITECTURE  
 
-Performance Optimization
+clockmate/  
+├── app/                        Frontend (Vite + React + TypeScript + Tailwind)  
+│   ├── src/  
+│   │   ├── components/         Reusable UI components  
+│   │   ├── hooks/              Custom hooks  
+│   │   ├── lib/                API client and utilities  
+│   │   └── pages/dashboard/    Core modules  
+│   │       ├── Clock.tsx       Attendance and photo capture  
+│   │       ├── Schedule.tsx    Shift management  
+│   │       ├── Timesheets.tsx  Dispute center  
+│   │       ├── Leave.tsx       Leave tracking  
+│   │       └── Payslips.tsx    Payroll viewing  
+│  
+├── backend/                    Backend (Node.js + Express + MongoDB)  
+│   ├── src/  
+│   │   ├── models/             Database schemas  
+│   │   ├── middleware/         Authentication and authorization  
+│   │   ├── utils/              Haversine calculations  
+│   │   └── routes/             API endpoints  
+│  
+└── README.md  
 
-* Powered by TanStack React Query
-* Optimistic UI updates
-* Background data caching
-* Smooth, zero-flicker user experience
+------------------------------------------------------------
 
-Timezone Enforcement
+LOCAL SETUP INSTRUCTIONS  
 
-* Hardcoded Australia/Sydney timezone using date-fns-tz
-* Prevents manipulation via device clock changes
+Prerequisites  
+- Node.js version 18 or higher  
+- MongoDB Atlas account or local MongoDB instance  
 
----
+Database Setup  
+1. Create a MongoDB cluster  
+2. Create a database user  
+3. Allow network access (0.0.0.0/0 for development)  
+4. Copy your connection string  
 
-PROJECT ARCHITECTURE
+Example:  
+mongodb+srv://username:password@cluster0.mongodb.net/clockmate  
 
-clockmate/
-├── app/                        Frontend (Vite + React + TypeScript + Tailwind)
-│   ├── src/
-│   │   ├── components/         Reusable UI components
-│   │   ├── hooks/              Custom hooks
-│   │   ├── lib/                API client and utilities
-│   │   └── pages/dashboard/    Core modules
-│   │       ├── Clock.tsx       Attendance and photo capture
-│   │       ├── Schedule.tsx    Shift management
-│   │       ├── Timesheets.tsx  Dispute center
-│   │       ├── Leave.tsx       Leave tracking
-│   │       └── Payslips.tsx    Payroll viewing
-│
-├── backend/                    Backend (Node.js + Express + MongoDB)
-│   ├── src/
-│   │   ├── models/             Database schemas
-│   │   ├── middleware/         Authentication and authorization
-│   │   ├── utils/              Haversine calculations
-│   │   └── routes/             API endpoints
-│
-└── README.md
+------------------------------------------------------------
 
----
+BACKEND SETUP  
 
-LOCAL SETUP INSTRUCTIONS
+1. Navigate to backend folder  
+   cd backend  
 
-Prerequisites
+2. Install dependencies  
+   npm install  
 
-* Node.js version 18 or higher
-* MongoDB Atlas account or local MongoDB instance
+3. Create .env file  
 
-Database Setup
+PORT=3001  
+MONGODB_URI=your_connection_string  
+JWT_SECRET=your_secret_key  
 
-1. Create a MongoDB cluster
-2. Create a database user
-3. Allow network access (0.0.0.0/0 for development)
-4. Copy your connection string
+4. Start server  
+   npm run dev  
 
-Example:
-mongodb+srv://username:password@cluster0.mongodb.net/clockmate
+------------------------------------------------------------
 
----
+FRONTEND SETUP  
 
-BACKEND SETUP
+1. Navigate to app folder  
+   cd app  
 
-1. Navigate to backend folder
-   cd backend
+2. Install dependencies  
+   npm install  
 
-2. Install dependencies
-   npm install
+3. Create .env file  
 
-3. Create .env file
+VITE_API_URL=http://localhost:3001/api  
 
-PORT=3001
-MONGODB_URI=your_connection_string
-JWT_SECRET=your_secret_key
+4. Start development server  
+   npm run dev  
 
-4. Start server
-   npm run dev
+Application will run at:  
+http://localhost:5173  
 
----
+------------------------------------------------------------
 
-FRONTEND SETUP
+MOBILE APP CONVERSION (CAPACITOR)  
 
-1. Navigate to app folder
-   cd app
+Step 1: Install Capacitor  
+npm install @capacitor/core @capacitor/cli  
+npm install @capacitor/ios @capacitor/android  
 
-2. Install dependencies
-   npm install
+Initialize project  
+npx cap init ClockMate com.victoriauni.clockmate  
 
-3. Create .env file
+------------------------------------------------------------
 
-VITE_API_URL=http://localhost:3001/api
+Step 2: Configure Build  
 
-4. Start development server
-   npm run dev
+Ensure capacitor.config.ts includes:  
 
-Application will run at:
-http://localhost:5173
+appId: com.victoriauni.clockmate  
+appName: ClockMate Pro  
+webDir: dist  
 
----
+------------------------------------------------------------
 
-MOBILE APP CONVERSION (CAPACITOR)
+Step 3: Build and Sync  
 
-Step 1: Install Capacitor
-npm install @capacitor/core @capacitor/cli
-npm install @capacitor/ios @capacitor/android
+npm run build  
+npx cap add android  
+npx cap add ios  
+npx cap sync  
 
-Initialize project
-npx cap init ClockMate com.victoriauni.clockmate
+------------------------------------------------------------
 
----
+Step 4: Run on Device  
 
-Step 2: Configure Build
+npx cap open android  
+or  
+npx cap open ios  
 
-Ensure capacitor.config.ts includes:
+Install required plugins  
+npm install @capacitor/camera @capacitor/geolocation  
 
-appId: com.victoriauni.clockmate
-appName: ClockMate Pro
-webDir: dist
+------------------------------------------------------------
 
----
+SUMMARY  
 
-Step 3: Build and Sync
+ClockMate Pro delivers a secure, scalable, and compliant workforce management solution tailored for Australian businesses.  
 
-npm run build
-npx cap add android
-npx cap add ios
-npx cap sync
+It ensures accuracy, efficiency, and a seamless user experience across both web and mobile platforms.  
 
----
-
-Step 4: Run on Device
-
-npx cap open android
-or
-npx cap open ios
-
-Install required plugins
-npm install @capacitor/camera @capacitor/geolocation
-
----
-
-SUMMARY
-
-ClockMate Pro delivers a secure, scalable, and compliant workforce management solution tailored for Australian businesses.
-
-By combining modern frontend technologies with a robust backend system, it ensures accuracy, efficiency, and a seamless user experience across both web and mobile platforms.
-
----
+------------------------------------------------------------
